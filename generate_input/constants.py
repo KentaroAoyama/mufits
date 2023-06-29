@@ -10,10 +10,11 @@ CRS_SEA = CRS_WGS84  # WGS84
 CRS_LAKE = CRS_WGS84
 
 # resolution of each data
-RES_DEM = 10.0
-RES_SEA = 500.0  # https://www.jodc.go.jp/jodcweb/JDOSS/infoJEGG_j.html
+RES_DEM = 10.0 * 10.0
+RES_SEA = 500.0 * 500.0  # https://www.jodc.go.jp/jodcweb/JDOSS/infoJEGG_j.html
 RES_LAKE = (
-    500.0  # TODO: currently same as sea, but maybe better to re-compile contour data
+    500.0
+    * 500.0  # TODO: currently same as sea, but maybe better to re-compile contour data
 )
 
 # topology index

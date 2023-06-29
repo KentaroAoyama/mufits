@@ -103,6 +103,10 @@ def __calc_ijk(m: int, nz: int, ny: int) -> Tuple[int]:
     return i, j, k
 
 
+def __calc_m(i, j, k, ny, nz):
+    return k * nz + j * ny + i
+
+
 def load_dem(pth_dem: PathLike) -> Tuple[List, List, List]:
     base_dir = Path(pth_dem)
     lat_ls, lng_ls, elv_ls = [], [], []
@@ -170,12 +174,35 @@ def __median(_ls: List) -> float:
     return median(_ls)
 
 
+def __stack_from_0(_ls: List[float]) -> List[float]:
+    c_ls = []
+    for i, _d in enumerate(_ls):
+        if len(c_ls) == 0:
+            c_ls.append(abs(_d) * 0.5)
+            continue
+        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+    return c_ls
+
+
+def __stack_from_center(_ls: List[float]) -> List[float]:
+    lhalf = int(len(_ls) * 0.5)
+    c_ls: List = list(range(len(_ls)))
+    sum_left = sum(_ls[:lhalf])
+    c_ls[0] = -sum_left + abs(_ls[0] * 0.5)
+    for i, _d in enumerate(_ls):
+        if i == 0:
+            continue
+        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+    return c_ls
+
+
 def generate_topo(
     pth_dem: PathLike,
     pth_seadem: PathLike,
     crs_rect: str,
     dxyz: Tuple[List, List, List],
     origin: Tuple[float, float, float],
+    align_center: bool = True,
 ) -> List[int]:
     # TODO: docstring & output type
 
@@ -191,9 +218,7 @@ def generate_topo(
     lat_dem_ls, lng_dem_ls, elv_dem_ls = None, None, None
     if cache_dem.exists():
         with open(cache_dem, "rb") as pkf:
-            lat_dem_ls, lng_dem_ls, elv_dem_ls = pickle.load(
-                pkf, pickle.HIGHEST_PROTOCOL
-            )
+            lat_dem_ls, lng_dem_ls, elv_dem_ls = pickle.load(pkf)
     else:
         lat_dem_ls, lng_dem_ls, elv_dem_ls = load_dem(pth_dem)
         with open(cache_dem, "wb") as pkf:
@@ -206,9 +231,7 @@ def generate_topo(
     lat_sea_ls, lng_sea_ls, elv_sea_ls = None, None, None
     if cache_sea.exists():
         with open(cache_sea, "rb") as pkf:
-            lat_sea_ls, lng_sea_ls, elv_sea_ls = pickle.load(
-                pkf, pickle.HIGHEST_PROTOCOL
-            )
+            lat_sea_ls, lng_sea_ls, elv_sea_ls = pickle.load(pkf)
     else:
         lat_sea_ls, lng_sea_ls, elv_sea_ls = load_sea_dem(pth_seadem)
         with open(cache_sea, "wb") as pkf:
@@ -216,13 +239,12 @@ def generate_topo(
                 (lat_sea_ls, lng_sea_ls, elv_sea_ls), pkf, pickle.HIGHEST_PROTOCOL
             )
 
-    # clip lake topography (TODO: 解像度が500mだと荒すぎるかも)
+    # clip lake topography
     lat_lake_ls, lng_lake_ls, elv_lake_ls = __clip_lake(
         lat_sea_ls, lng_sea_ls, elv_sea_ls
     )
 
     # convert to rect crs (WGS84 to crs_rect)
-    # NOTE: Both DEM and bathymetry data use WGS84.
     transformer_wgs = Transformer.from_crs(CRS_WGS84, crs_rect, always_xy=True)
     transformer_dem = Transformer.from_crs(CRS_DEM, crs_rect, always_xy=True)
     transformer_sea = Transformer.from_crs(CRS_SEA, crs_rect, always_xy=True)
@@ -231,6 +253,15 @@ def generate_topo(
     # calculate the coordinates of the grid center
     x_origin, y_origin = transformer_wgs.transform(origin[1], origin[0])
     elv_origin = origin[2]
+    xc_ls, yc_ls, zc_ls = None, None, None
+    if align_center:
+        xc_ls = __stack_from_center(dx_ls)
+        yc_ls = __stack_from_center(dy_ls)
+        zc_ls = __stack_from_0(dz_ls)
+    else:
+        xc_ls = __stack_from_0(dx_ls)
+        yc_ls = __stack_from_0(dy_ls)
+        zc_ls = __stack_from_0(dz_ls)
 
     # convert DEM & seadem CRS
     x_dem_ls, y_dem_ls = transformer_dem.transform(lng_dem_ls, lat_dem_ls)
@@ -256,100 +287,98 @@ def generate_topo(
 
     # get center coordinates of grid
     nx, ny, nz = len(dx_ls), len(dy_ls), len(dz_ls)
-    nxyz = nz * ny * nx
-    x_ls, y_ls, z_ls = list(range(nxyz)), list(range(nxyz)), list(range(nxyz))
-    cx, cy, cz = 0.0, 0.0, 0.0
-    for dx in dx_ls:
-        cx += 0.5 * dx
-        for dy in dy_ls:
-            cy += 0.5 * dy
-            for dz in dz_ls:
-                cz += 0.5 * dz
-                x_ls.append(cx)
-                y_ls.append(cy)
-                z_ls.append(cz)
-
     # generate topology data
-    topo_ls: List = [int]
-    for m in range(nxyz):
-        # get rectangular coordinates of each grid center
-        xc = x_origin + x_ls[m]
-        yc = y_origin - y_ls[m]
-        elvc = elv_origin + z_ls[m]
+    topo_ls: List[int] = []
+    for i in range(nx):
+        for j in range(ny):
+            # get grid size δx and δy
+            dx, dy = dx_ls[i], dy_ls[j]
+            xc = x_origin + xc_ls[i]
+            yc = y_origin - yc_ls[j]
 
-        # get grid size δx and δy
-        i, j, _ = __calc_ijk(m, nz, ny)
-        dx, dy = dx_ls[i], dy_ls[j]
+            # get DEM data within the grid size
+            x_dem_ls, y_dem_ls, elv_dem_ls = __clip_xy(
+                x_dem_arr, y_dem_arr, elv_dem_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
+            )
 
-        # get DEM data within the grid size
-        x_dem_ls, y_dem_ls, elv_dem_ls = __clip_xy(
-            x_dem_arr, y_dem_arr, elv_dem_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
-        )
+            # get sea data within the grid size
+            x_sea_ls, y_sea_ls, elv_sea_ls = __clip_xy(
+                x_sea_arr, y_sea_arr, elv_sea_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
+            )
 
-        # get sea data within the grid size
-        x_sea_ls, y_sea_ls, elv_sea_ls = __clip_xy(
-            x_sea_arr, y_sea_arr, elv_sea_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
-        )
+            # get lake data within the grid size
+            x_lake_ls, y_lake_ls, elv_lake_ls = __clip_xy(
+                x_lake_arr,
+                y_lake_arr,
+                elv_lake_arr,
+                (xc - dx, xc + dx, yc - dy, yc + dy),
+            )
 
-        # get lake data within the grid size
-        x_lake_ls, y_lake_ls, elv_lake_ls = __clip_xy(
-            x_lake_arr, y_lake_arr, elv_lake_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
-        )
-
-        # assign the topology with the largest area
-        area_dem = RES_DEM * float(len(elv_dem_ls))
-        area_sea = RES_SEA * float(len(elv_sea_ls))
-        area_lake = RES_LAKE * float(len(elv_lake_ls))
-
-        # if empty
-        _idx: int = None
-        if area_dem == area_sea == area_lake == 0.0:
-            _idx = 0
-        else:
-            _idx = np.argmax([area_dem, area_sea, area_lake])
-        assert _idx is not None, _idx
-
-        # determine actnum
-        topo_idx = None
-
-        # refer DEM
-        if _idx == 0:
-            _median = __median(elv_dem_ls)
-            # above DEM: AIR
-            if _median > elvc:
-                topo_idx = IDX_AIR
-            # below DEM: LAND
+            # assign the topology with the largest area
+            area_dem = RES_DEM * float(len(elv_dem_ls))
+            area_sea = RES_SEA * float(len(elv_sea_ls))
+            area_lake = RES_LAKE * float(len(elv_lake_ls))
+            median_land = __median(elv_dem_ls)
+            median_sea = __median(elv_sea_ls)
+            median_lake = __median(elv_lake_ls)
+            # if empty
+            _idx: int = None
+            if area_dem == area_sea == area_lake == 0.0:
+                _idx = 0
             else:
-                topo_idx = IDX_LAND
-        # refer SEA
-        elif _idx == 1:
-            _median = __median(elv_sea_ls)
-            # above 0m: AIR
-            if elvc > 0.0:
-                topo_idx = IDX_AIR
-            # within the range of seabed and 0m: SEA
-            elif _median < elvc <= 0.0:
-                topo_idx = IDX_SEA
-            # below seabed: LAND
-            else:
-                topo_idx = IDX_LAND
-        # refer LAKE
-        else:
-            _median = __median(elv_lake_ls)
-            _median_topo = __median(elv_dem_ls)
-            # Above land topology: AIR
-            if elvc > _median_topo:
-                topo_idx = IDX_AIR
-            # within the range of bottom of the lake and land topology
-            elif _median < elvc <= _median_topo:
-                topo_idx = IDX_LAKE
-            # below bottom of the lake
-            else:
-                topo_idx = IDX_LAND
+                _idx = np.argmax([area_dem, area_sea, area_lake])
+            assert _idx is not None, _idx
 
-        topo_ls.append(topo_idx)
+            for k in range(nz):
+                # get rectangular coordinates of each grid center
+                elvc = elv_origin - zc_ls[k]
+                # determine actnum
+                topo_idx = None
+                # refer DEM
+                if _idx == 0:
+                    # above DEM: AIR
+                    if median_land > elvc:
+                        topo_idx = IDX_AIR
+                    # below DEM: LAND
+                    else:
+                        topo_idx = IDX_LAND
+                # refer SEA
+                elif _idx == 1:
+                    # above 0m: AIR
+                    if elvc > 0.0:
+                        topo_idx = IDX_AIR
+                    # within the range of seabed and 0m: SEA
+                    elif median_sea < elvc <= 0.0:
+                        topo_idx = IDX_SEA
+                    # below seabed: LAND
+                    else:
+                        topo_idx = IDX_LAND
+                # refer LAKE
+                else:
+                    # Above land topology: AIR
+                    if elvc > median_land:
+                        topo_idx = IDX_AIR
+                    # within the range of bottom of the lake and land topology
+                    elif median_lake < elvc <= median_land:
+                        topo_idx = IDX_LAKE
+                    # below bottom of the lake
+                    else:
+                        topo_idx = IDX_LAND
+                topo_ls.append(topo_idx)
 
     return topo_ls
+
+
+def generate_act_ls(topo_ls: List[int]) -> List[int]:
+    actnum_ls = []
+    for _idx in topo_ls:
+        actnum: int = None
+        if _idx == IDX_LAND:
+            actnum = 1
+        else:
+            actnum = 2
+        actnum_ls.append(actnum)
+    return actnum_ls
 
 
 def write(_f: TextIO, _string: str):
@@ -718,13 +747,13 @@ if __name__ == "__main__":
     pth_sea = "./seadem"
     crs_rect = "epsg:6680"
     dxyz = (
-        [1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
-        [1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
-        [1000.0, 1000.0, 1000.0, 1000.0, 1000.0],
+        [300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
+        [300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
+        [300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
     )
     origin = (42.688156, 141.379868, 1041.0)
 
-    topo_ls = generate_topo(pth_dem, pth_sea, crs_rect, dxyz, origin)
+    topo_ls = generate_topo(pth_dem, pth_sea, crs_rect, dxyz, origin, align_center=True)
 
     actnum_ls = []
     for _idx in topo_ls:
