@@ -5,15 +5,15 @@
 """
 
 from functools import partial
-from typing import List, Tuple, TextIO, Callable
+from typing import List, Tuple, Dict, TextIO, Callable
 from pathlib import Path
 from os import PathLike, makedirs
 import re
-from statistics import median
 import pickle
 
 import pandas as pd
 from pyproj import Transformer
+import numpy as np
 
 from constants import (
     BOUNDS,
@@ -31,26 +31,20 @@ from constants import (
     CACHE_DIR,
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
+    TOPO_CONST_PROPS,
+    TOPO_INIT_PROPS,
+    DENS_ROCK,
+    HC_ROCK,
+    P_GROUND,
+    P_GRAD_AIR,
+    P_GRAD_SEA,
+    P_GRAD_LAKE,
+    P_GRAD_ROCK,
 )
-
-nx, ny, nz = 10, 2, 5
 
 # TODO: 天水の量をtimestepごとに調整する
 # TODO: 入力：グリッド, モデルパラメータ（timestepごとの流入量, 浸透率, CO2分率とする）
 # TODO: generate using 10km × 10km DEM (10m)
-
-gx = [100.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 100.0]
-gy = [10.0, 10.0]
-gz = [35.0, 10.0, 10.0, 10.0, 35.0]
-act_ls = []
-for k in range(nz):
-    for j in range(ny):
-        for i in range(nx):
-            if k == 0:
-                act_ls.append(2)
-            else:
-                act_ls.append(1)
-assert len(act_ls) == nx * ny * nz
 
 
 def __get_two_floatstring(_str: str) -> Tuple[float]:
@@ -71,7 +65,7 @@ def __get_two_floatstring(_str: str) -> Tuple[float]:
 
 def __clip_xy(
     _x: List, _y: List, _elv: List, bounds: Tuple[float]
-) -> Tuple[List, List, List]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     _x_arr = np.array(_x)
     _y_arr = np.array(_y)
     _elv_arr = np.array(_elv)
@@ -81,7 +75,7 @@ def __clip_xy(
         * (bounds[2] < _y_arr)
         * (_y_arr < bounds[3])
     )
-    return _x_arr[filt].tolist(), _y_arr[filt].tolist(), _elv_arr.tolist()
+    return _x_arr[filt], _y_arr[filt], _elv_arr[filt]
 
 
 def __clip_lake(_lat: List, _lng: List, _elv: List) -> Tuple[List, List, List]:
@@ -89,12 +83,16 @@ def __clip_lake(_lat: List, _lng: List, _elv: List) -> Tuple[List, List, List]:
     lng_arr = np.array(_lng)
     elv_arr = np.array(_elv)
     lat_lake, lng_lake, elv_lake = [], [], []
+    lat_sea, lng_sea, elv_sea = [], [], []
     for _, (lat0, lat1, lng0, lng1, dh) in BOUNDS.items():
         filt = (lat0 < lat_arr) * (lat_arr < lat1) * (lng0 < lng_arr) * (lng_arr < lng1)
         lat_lake.extend(lat_arr[filt].tolist())
         lng_lake.extend(lng_arr[filt].tolist())
         elv_lake.extend((elv_arr[filt] + dh).tolist())
-    return lat_lake, lng_lake, elv_lake
+        lat_sea.extend(lat_arr[np.logical_not(filt)].tolist())
+        lng_sea.extend(lng_arr[np.logical_not(filt)].tolist())
+        elv_sea.extend(elv_arr[np.logical_not(filt)].tolist())
+    return lat_lake, lng_lake, elv_lake, lat_sea, lng_sea, elv_sea
 
 
 def __calc_ijk(m: int, nz: int, ny: int) -> Tuple[int]:
@@ -109,51 +107,10 @@ def __calc_m(i, j, k, ny, nz):
 
 def load_dem(pth_dem: PathLike) -> Tuple[List, List, List]:
     base_dir = Path(pth_dem)
-    lat_ls, lng_ls, elv_ls = [], [], []
-    for pth in base_dir.glob("**/*"):
-        if pth.suffix != ".xml":
-            continue
-        with open(pth, "r", encoding="utf-8") as f:
-            # parameters of DEM
-            flag_elv = False
-            lat_range, lng_range = [None, None], [None, None]
-            n_lat, n_lng = None, None
-            lat_step, lng_step = None, None
-            cou_max = None
-            # increment
-            cou: int = 0
-            for line in f.readlines():
-                if flag_elv:
-                    result = re.search("\d+(\.\d+)?", line)
-                    a, b = divmod(cou, n_lat)
-                    lat_ls.append(lat_range[0] + a * lat_step)
-                    lng_ls.append(lng_range[0] + b * lng_step)
-                    elv_ls.append(float(result.group()))
-                    cou += 1
-                    if cou > cou_max:
-                        break
-                if "<gml:lowerCorner>" in line:
-                    _lat, _lng = __get_two_floatstring(line)
-                    lat_range[0] = _lat
-                    lng_range[0] = _lng
-                if "<gml:upperCorner>" in line:
-                    _lat, _lng = __get_two_floatstring(line)
-                    lat_range[1] = _lat
-                    lng_range[1] = _lng
-                if "<gml:high>" in line:
-                    _nlat, _nlng = __get_two_floatstring(line)
-                    n_lat = int(_nlat)
-                    n_lng = int(_nlng)
-                if "<gml:tupleList>" in line:
-                    assert None not in lat_range
-                    assert None not in lng_range
-                    assert n_lat is not None
-                    assert n_lng is not None
-                    lat_step = (lat_range[1] - lat_range[0]) / n_lat
-                    lng_step = (lng_range[1] - lng_range[0]) / n_lng
-                    cou_max = n_lat * n_lng
-                    flag_elv = True
-    return lat_ls, lng_ls, elv_ls
+    fpth = base_dir.joinpath("out.xyz")
+    assert fpth.exists(), fpth
+    _df = pd.read_csv(fpth, sep="\s+", header=None)
+    return _df[1].tolist(), _df[0].tolist(), _df[2].tolist()
 
 
 def load_sea_dem(pth_seadem: PathLike) -> Tuple[List, List, List]:
@@ -171,7 +128,7 @@ def load_sea_dem(pth_seadem: PathLike) -> Tuple[List, List, List]:
 def __median(_ls: List) -> float:
     if len(_ls) == 0:
         return 0.0
-    return median(_ls)
+    return np.median(_ls)
 
 
 def __stack_from_0(_ls: List[float]) -> List[float]:
@@ -240,9 +197,14 @@ def generate_topo(
             )
 
     # clip lake topography
-    lat_lake_ls, lng_lake_ls, elv_lake_ls = __clip_lake(
-        lat_sea_ls, lng_sea_ls, elv_sea_ls
-    )
+    (
+        lat_lake_ls,
+        lng_lake_ls,
+        elv_lake_ls,
+        lat_sea_ls,
+        lng_sea_ls,
+        elv_sea_ls,
+    ) = __clip_lake(lat_sea_ls, lng_sea_ls, elv_sea_ls)
 
     # convert to rect crs (WGS84 to crs_rect)
     transformer_wgs = Transformer.from_crs(CRS_WGS84, crs_rect, always_xy=True)
@@ -284,7 +246,6 @@ def generate_topo(
         np.array(y_lake_ls),
         np.array(elv_lake_ls),
     )
-
     # get center coordinates of grid
     nx, ny, nz = len(dx_ls), len(dy_ls), len(dz_ls)
     # generate topology data
@@ -292,35 +253,31 @@ def generate_topo(
     for i in range(nx):
         for j in range(ny):
             # get grid size δx and δy
-            dx, dy = dx_ls[i], dy_ls[j]
+            dx, dy = dx_ls[i] * 0.5, dy_ls[j] * 0.5
             xc = x_origin + xc_ls[i]
             yc = y_origin - yc_ls[j]
-
             # get DEM data within the grid size
-            x_dem_ls, y_dem_ls, elv_dem_ls = __clip_xy(
-                x_dem_arr, y_dem_arr, elv_dem_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
-            )
+            bounds = (xc - dx, xc + dx, yc - dy, yc + dy)
+            _, _, elv_dem_tmp = __clip_xy(x_dem_arr, y_dem_arr, elv_dem_arr, bounds)
 
             # get sea data within the grid size
-            x_sea_ls, y_sea_ls, elv_sea_ls = __clip_xy(
-                x_sea_arr, y_sea_arr, elv_sea_arr, (xc - dx, xc + dx, yc - dy, yc + dy)
-            )
+            _, _, elv_sea_tmp = __clip_xy(x_sea_arr, y_sea_arr, elv_sea_arr, bounds)
 
             # get lake data within the grid size
-            x_lake_ls, y_lake_ls, elv_lake_ls = __clip_xy(
+            _, _, elv_lake_tmp = __clip_xy(
                 x_lake_arr,
                 y_lake_arr,
                 elv_lake_arr,
-                (xc - dx, xc + dx, yc - dy, yc + dy),
+                bounds,
             )
 
             # assign the topology with the largest area
-            area_dem = RES_DEM * float(len(elv_dem_ls))
-            area_sea = RES_SEA * float(len(elv_sea_ls))
-            area_lake = RES_LAKE * float(len(elv_lake_ls))
-            median_land = __median(elv_dem_ls)
-            median_sea = __median(elv_sea_ls)
-            median_lake = __median(elv_lake_ls)
+            area_dem = RES_DEM * float(len(elv_dem_tmp))
+            area_sea = RES_SEA * float(len(elv_sea_tmp))
+            area_lake = RES_LAKE * float(len(elv_lake_tmp))
+            median_land = __median(elv_dem_tmp)
+            median_sea = __median(elv_sea_tmp)
+            median_lake = __median(elv_lake_tmp)
             # if empty
             _idx: int = None
             if area_dem == area_sea == area_lake == 0.0:
@@ -328,7 +285,6 @@ def generate_topo(
             else:
                 _idx = np.argmax([area_dem, area_sea, area_lake])
             assert _idx is not None, _idx
-
             for k in range(nz):
                 # get rectangular coordinates of each grid center
                 elvc = elv_origin - zc_ls[k]
@@ -336,12 +292,12 @@ def generate_topo(
                 topo_idx = None
                 # refer DEM
                 if _idx == 0:
-                    # above DEM: AIR
-                    if median_land > elvc:
-                        topo_idx = IDX_AIR
                     # below DEM: LAND
-                    else:
+                    if median_land > elvc:
                         topo_idx = IDX_LAND
+                    # above DEM: AIR
+                    else:
+                        topo_idx = IDX_AIR
                 # refer SEA
                 elif _idx == 1:
                     # above 0m: AIR
@@ -374,11 +330,54 @@ def generate_act_ls(topo_ls: List[int]) -> List[int]:
     for _idx in topo_ls:
         actnum: int = None
         if _idx == IDX_LAND:
+            # activate
             actnum = 1
         else:
+            # inactive
             actnum = 2
         actnum_ls.append(actnum)
     return actnum_ls
+
+
+def generamte_rocknum_and_props(
+    topo_ls: List[int], top: float, nxyz: Tuple, gz: List
+) -> Tuple[List, Dict, Dict, Dict]:
+    topo_unique = []
+    for _idx in topo_ls:
+        if _idx not in topo_unique:
+            topo_unique.append(_idx)  # must maintain order
+    topo_rocknum_map = {_idx: rocknum for rocknum, _idx in enumerate(topo_unique)}
+    rocknum_ls = []
+    rocknum_consts = {}
+    rocknum_inits = {}
+    for _idx in topo_ls:
+        rocknum = topo_rocknum_map[_idx]
+        rocknum_ls.append(rocknum)
+        rocknum_consts.setdefault(rocknum, TOPO_CONST_PROPS[_idx])
+        rocknum_inits.setdefault(rocknum, TOPO_INIT_PROPS[_idx])
+
+    rocknum_pgrad = {}
+    for _idx in topo_unique:
+        _prop = rocknum_pgrad.setdefault(topo_rocknum_map[_idx], {})
+        if _idx == IDX_LAND:
+            _prop["a"] = 0.0
+            _prop["b"] = P_GRAD_ROCK
+        if _idx == IDX_AIR:
+            _prop["a"] = P_GROUND - top * P_GRAD_AIR
+            _prop["b"] = P_GRAD_AIR
+        if _idx == IDX_LAKE:
+            elv_lake: float = None
+            for m, _idx_tmp in enumerate(topo_ls):
+                if _idx_tmp == IDX_LAKE:
+                    _, _, k = __calc_ijk(m, nxyz[2], nxyz[1])
+                    elv_lake = top - sum(gz[: k + 1])
+                    break
+            _prop["a"] = P_GROUND - elv_lake * P_GRAD_AIR
+            _prop["b"] = P_GRAD_LAKE
+        if _idx == IDX_SEA:
+            _prop["a"] = P_GROUND
+            _prop["b"] = P_GRAD_SEA
+    return rocknum_ls, rocknum_consts, rocknum_inits, rocknum_pgrad
 
 
 def write(_f: TextIO, _string: str):
@@ -386,7 +385,18 @@ def write(_f: TextIO, _string: str):
     _f.write(_string)
 
 
-def generate_input(gx, gy, gz, act_ls, fpth: str):
+def generate_input(
+    gx: List,
+    gy: List,
+    gz: List,
+    act_ls: List,
+    rocknum_ls: List,
+    rocknum_consts: Dict,
+    rocknum_params: Dict,
+    rocknum_pres_grad: Dict,
+    src_props: Dict,
+    fpth: str,
+):
     with open(fpth, "w", encoding="utf-8") as _f:
         __write: Callable = partial(write, _f)
 
@@ -398,11 +408,6 @@ def generate_input(gx, gy, gz, act_ls, fpth: str):
 
         # HCROCK
         __write("HCROCK                                  We enable heat conduction.")
-        __write("")  # \n
-
-        # GRIDUNIT
-        __write("GRIDUNIT")
-        __write("  'METRES' /")
         __write("")  # \n
 
         # GRID
@@ -473,15 +478,15 @@ def generate_input(gx, gy, gz, act_ls, fpth: str):
         # TODO
         __write("BOUNDARY                               We define the boundaries:")
         __write(
-            "   102   1 10 1 2 5 5 'K+' 5* INFTHIN 4* 2 2 /    the bottom bound. marked as FLUXNUM=102/"
+            f"   102   1 {len(gx)} 1 {len(gy)} {len(gz)} {len(gz)} 'K+' 5* INFTHIN 4* 2 2 /    the bottom bound. marked as FLUXNUM=102/"
         )
         __write("/")
         __write("")
 
         # SRCSPECG
-        # TODO
         __write("SRCSPECG")
-        __write(" ’MAGMASRC’ 5 1 5 /")
+        srci, srcj, srck = src_props["i"], src_props["j"], src_props["k"]
+        __write(f" ’MAGMASRC’ {srci} {srcj} {srck} /")
         __write("/")
         __write("")
 
@@ -492,29 +497,12 @@ def generate_input(gx, gy, gz, act_ls, fpth: str):
         __write("")  # \n
 
         # EQUALREG
-        # TODO
         __write(
             "EQUALREG                              We specify uniform distributions:"
         )
-        __write("   PORO      0.25 ROCKNUM 1 /           porosity = 0.25")
-        __write(
-            "   PERMX     100  ROCKNUM 1 /                     X-permeability = 100 mD"
-        )
-        __write(
-            "   PERMY     100  ROCKNUM 1 /                     Y-permeability = 100 mD"
-        )
-        __write(
-            "   PERMZ     100  ROCKNUM 1 /                     Z-permeability = 100 mD"
-        )
-        __write(
-            "   HCONDCFX  2.   ROCKNUM 1 /                     X-Heat cond. coeff. = 2 W/m/K"
-        )
-        __write(
-            "   HCONDCFY  2.   ROCKNUM 1 /                     Y-Heat cond. coeff. = 2 W/m/K"
-        )
-        __write(
-            "   HCONDCFZ  2.   ROCKNUM 1 /                     Z-Heat cond. coeff. = 2 W/m/K"
-        )
+        for rocknum, props in rocknum_consts.items():
+            for _str in props:
+                __write(_str + " " + f"ROCKNUM {rocknum}  /")
         __write("/")
         __write("")  # \n
 
@@ -532,24 +520,33 @@ def generate_input(gx, gy, gz, act_ls, fpth: str):
         __write("")  # \n
 
         # ROCK
-        __write("          Rock properties are specified within brackets ROCK-ENDROCK")
-        __write(
-            "ROCK      <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
-        )
-        __write("  1  /")
-        __write("")  # \n
+        for rocknum in list(set(rocknum_ls)):
+            __write(
+                "          Rock properties are specified within brackets ROCK-ENDROCK"
+            )
+            __write(
+                "ROCK      <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+            )
+            __write(f"  {rocknum} /")
+            __write("ROCKDH                                  We specify that")
+            __write(
+                f"  {DENS_ROCK}  {HC_ROCK} /                          rock density is 2900 kg/m3, rock heat capacity is 0.84 kJ/kg/K"
+            )
+            __write("")  # \n
 
-        # TODO
-        __write("ROCKDH                                  We specify that")
-        __write(
-            "  2900  0.84 /                          rock density is 2900 kg/m3, rock heat capacity is 0.84 kJ/kg/K"
-        )
-        __write("")  # \n
+            # ENDROCK
+            __write(
+                "ENDROCK  >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+            )
+            __write("")  # \n
 
-        # ENDROCK
-        __write(
-            "ENDROCK  >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
-        )
+        # ROCKNUM
+        __write("ROCKNUM")
+        _str: str = "  "
+        for _r in rocknum_ls:
+            _str += str(_r) + "  "
+        _str += "  /"
+        __write(_str)
         __write("")  # \n
 
         # LOADEOS
@@ -624,29 +621,29 @@ def generate_input(gx, gy, gz, act_ls, fpth: str):
 
         # OPERAREG
         __write("OPERAREG")
-        __write(
-            "   PRES DEPTH  SATNUM  1 MULTA  0.2  0.0099 /          PRES=0.2+0.0099*DEPTH"
-        )
+        for rocknum, prop in rocknum_pres_grad.items():
+            a, b = prop["a"], prop["b"]
+            __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {a}  {b}  /")
         __write("/")
         __write("")  # \n
 
         # EQUALREG
-        # TODO
         __write("EQUALREG")
-        __write("   TEMPC   20  ROCKNUM 1   /     The initial temperature is 20 C  ")
-        __write("   COMP1T  0.0             /     No CO2 is present ")
+        for rocknum, params in rocknum_params.items():
+            for _str in params:
+                __write(_str + "  " + f"ROCKNUM  {rocknum}  /")
         __write(
             "   TEMPC   200 FLUXNUM 102 /     The temperature of the bottom boundary is 200 C"
         )
-        __write("   PERMZ   0.0 FLUXNUM 102 /")
         __write("/")
         __write("")  # \n
 
         # EQUALNAM
         __write("EQUALNAM")
-        __write("  PRES 10. ’MAGMASRC’ /")
-        __write("  TEMPC 400. ’MAGMASRC’/")
-        __write("  COMP1T 0.5 ’MAGMASRC’/")
+        pres, tempe, comp1t = src_props["pres"], src_props["tempe"], src_props["comp1t"]
+        __write(f"  PRES {pres} ’MAGMASRC’ /")
+        __write(f"  TEMPC {tempe} ’MAGMASRC’/")
+        __write(f"  COMP1T {comp1t} ’MAGMASRC’/")
         __write("/")
         __write("")  # \n
         __write("")  # \n
@@ -720,25 +717,15 @@ from matplotlib import pyplot as plt
 from matplotlib import cm
 
 if __name__ == "__main__":
-    # lat, lng, elv = load_sea_dem("seadem")
-    # lat_arr = np.array(lat)
-    # lng_arr = np.array(lng)
-    # elv_arr = np.array(elv)
-    # filt = (
-    #     (42.674796 < lat_arr)
-    #     * (lat_arr < 42.818721)
-    #     * (141.257462 < lng_arr)
-    #     * (lng_arr < 141.427571)
-    # )
-    # lat_lake = lat_arr[filt]
-    # lng_lake = lng_arr[filt]
-    # elv_lake = elv_arr[filt] - 220.73
-    # print(elv_lake.mean())
+    # lat_dem_ls, lng_dem_ls, elv_dem_ls = load_dem("./dem")
+    # lat_arr = np.array(lat_dem_ls)[::100]
+    # lng_arr = np.array(lng_dem_ls)[::100]
+    # elv_arr = np.array(elv_dem_ls)[::100]
     # fig, ax = plt.subplots()
-    # elv_min = elv_lake.min()
+    # elv_min = elv_arr.min()
     # # print([i / elv_min for i in elv_lake])
     # # colors = [cm.jet(i / elv_min) for i in elv_lake]
-    # mappable = ax.scatter(lng_lake, lat_lake, c=elv_lake, cmap="coolwarm")
+    # mappable = ax.scatter(lng_arr, lat_arr, c=elv_arr, cmap="coolwarm")
     # fig.colorbar(mappable)
     # plt.show()
 
@@ -747,24 +734,79 @@ if __name__ == "__main__":
     pth_sea = "./seadem"
     crs_rect = "epsg:6680"
     dxyz = (
-        [300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
-        [300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
-        [300.0, 300.0, 300.0, 300.0, 300.0, 300.0],
+        [
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+        ],
+        [
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+            100.0,
+        ],
+        [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
     )
-    origin = (42.688156, 141.379868, 1041.0)
+    nxyz = (len(dxyz[0]), len(dxyz[1]), len(dxyz[2]))
+    origin = (42.690559, 141.377357, 1041.0)
+    src_props = {"i": 10, "j": 10, "k": 11, "pres": 10.0, "tempe": 400.0, "comp1t": 0.5}
 
     topo_ls = generate_topo(pth_dem, pth_sea, crs_rect, dxyz, origin, align_center=True)
+    actnum_ls = generate_act_ls(topo_ls)
 
-    actnum_ls = []
-    for _idx in topo_ls:
-        actnum: int = None
-        if _idx == IDX_LAND:
-            actnum = 1
-        else:
-            actnum = 2
-        actnum_ls.append(actnum)
+    (
+        rocknum_ls,
+        rocknum_consts,
+        rocknum_inits,
+        rocknum_pres_grad,
+    ) = generamte_rocknum_and_props(topo_ls, origin[2], nxyz, dxyz[2])
 
-    print("topo_ls")  #!
-    print(topo_ls)  #!
-
-    generate_input(dxyz[0], dxyz[1], dxyz[2], actnum_ls, "tmp2.RUN")
+    generate_input(
+        dxyz[0],
+        dxyz[1],
+        dxyz[2],
+        actnum_ls,
+        rocknum_ls,
+        rocknum_consts,
+        rocknum_inits,
+        rocknum_pres_grad,
+        src_props,
+        "tmp2.RUN",
+    )
