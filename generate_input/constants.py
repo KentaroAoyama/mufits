@@ -6,7 +6,7 @@ BOUNDS = {"Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 2
 # CRS of each toporogical data
 CRS_WGS84 = "epsg:4326"
 CRS_DEM = CRS_WGS84
-CRS_SEA = CRS_WGS84  # WGS84
+CRS_SEA = CRS_WGS84
 CRS_LAKE = CRS_WGS84
 
 # resolution of each data

@@ -8,12 +8,15 @@ from functools import partial
 from typing import List, Tuple, Dict, TextIO, Callable
 from pathlib import Path
 from os import PathLike, makedirs
-import re
 import pickle
 
 import pandas as pd
 from pyproj import Transformer
 import numpy as np
+from tqdm import tqdm
+
+from plt_topo import plt_topo
+from utils import calc_ijk, calc_m
 
 from constants import (
     BOUNDS,
@@ -45,22 +48,6 @@ from constants import (
 # TODO: 天水の量をtimestepごとに調整する
 # TODO: 入力：グリッド, モデルパラメータ（timestepごとの流入量, 浸透率, CO2分率とする）
 # TODO: generate using 10km × 10km DEM (10m)
-
-
-def __get_two_floatstring(_str: str) -> Tuple[float]:
-    """Get two decimals in a row separated by whitespace
-    (e.g., 40.0, 140.0)
-
-    Args:
-        _str (str): String
-
-    Returns:
-        Tuple[float]: Two floats
-    """
-    result = re.search("\d+(\.\d+)?\s+\d+(\.\d+)?", _str)
-    lat_lng_str = result.group()
-    _lat, _lng = lat_lng_str.split(" ")
-    return float(_lat), float(_lng)
 
 
 def __clip_xy(
@@ -95,16 +82,6 @@ def __clip_lake(_lat: List, _lng: List, _elv: List) -> Tuple[List, List, List]:
     return lat_lake, lng_lake, elv_lake, lat_sea, lng_sea, elv_sea
 
 
-def __calc_ijk(m: int, nz: int, ny: int) -> Tuple[int]:
-    k, q = divmod(m, nz)
-    j, i = divmod(q, ny)
-    return i, j, k
-
-
-def __calc_m(i, j, k, ny, nz):
-    return k * nz + j * ny + i
-
-
 def load_dem(pth_dem: PathLike) -> Tuple[List, List, List]:
     base_dir = Path(pth_dem)
     fpth = base_dir.joinpath("out.xyz")
@@ -128,7 +105,7 @@ def load_sea_dem(pth_seadem: PathLike) -> Tuple[List, List, List]:
 def __median(_ls: List) -> float:
     if len(_ls) == 0:
         return 0.0
-    return np.median(_ls)
+    return np.nanmedian(_ls)
 
 
 def __stack_from_0(_ls: List[float]) -> List[float]:
@@ -142,14 +119,17 @@ def __stack_from_0(_ls: List[float]) -> List[float]:
 
 
 def __stack_from_center(_ls: List[float]) -> List[float]:
-    lhalf = int(len(_ls) * 0.5)
-    c_ls: List = list(range(len(_ls)))
-    sum_left = sum(_ls[:lhalf])
-    c_ls[0] = -sum_left + abs(_ls[0] * 0.5)
-    for i, _d in enumerate(_ls):
-        if i == 0:
-            continue
-        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+    n = len(_ls)
+    if divmod(n, 2)[1] == 0:
+        sum_left = -sum(_ls[: int(n * 0.5)])
+    else:
+        _lhalf = int(n * 0.5) + 1
+        sum_left = -sum(_ls[:_lhalf]) + 0.5 * _ls[_lhalf]
+    c_ls: List = []
+    for _d in _ls:
+        sum_left += _d * 0.5
+        c_ls.append(sum_left)
+        sum_left += _d * 0.5
     return c_ls
 
 
@@ -159,6 +139,7 @@ def generate_topo(
     crs_rect: str,
     dxyz: Tuple[List, List, List],
     origin: Tuple[float, float, float],
+    pos_src: Tuple[float, float, float],
     align_center: bool = True,
 ) -> List[int]:
     # TODO: docstring & output type
@@ -211,6 +192,7 @@ def generate_topo(
     transformer_dem = Transformer.from_crs(CRS_DEM, crs_rect, always_xy=True)
     transformer_sea = Transformer.from_crs(CRS_SEA, crs_rect, always_xy=True)
     transformer_lake = Transformer.from_crs(CRS_LAKE, crs_rect, always_xy=True)
+    transformer_inv = Transformer.from_crs(crs_rect, CRS_WGS84, always_xy=True)
 
     # calculate the coordinates of the grid center
     x_origin, y_origin = transformer_wgs.transform(origin[1], origin[0])
@@ -224,6 +206,13 @@ def generate_topo(
         xc_ls = __stack_from_0(dx_ls)
         yc_ls = __stack_from_0(dy_ls)
         zc_ls = __stack_from_0(dz_ls)
+
+    # get src position
+    latsrc, lngsrc, elvsrc = pos_src
+    xsrc, ysrc = transformer_wgs.transform(lngsrc, latsrc)
+    isrc = np.argmin(np.square(np.array(xc_ls) - (xsrc - x_origin)))
+    jsrc = np.argmin(np.square(np.array(yc_ls) - (y_origin - ysrc)))
+    ksrc = np.argmin(np.square(np.array(zc_ls) - (elv_origin - elvsrc)))
 
     # convert DEM & seadem CRS
     x_dem_ls, y_dem_ls = transformer_dem.transform(lng_dem_ls, lat_dem_ls)
@@ -249,13 +238,19 @@ def generate_topo(
     # get center coordinates of grid
     nx, ny, nz = len(dx_ls), len(dy_ls), len(dz_ls)
     # generate topology data
-    topo_ls: List[int] = []
-    for i in range(nx):
+    topo_ls: List[int] = np.zeros(shape=nz * ny * nx).tolist()
+    lat_2d: List = np.zeros(shape=(ny, nx)).tolist()
+    lng_2d: List = np.zeros(shape=(ny, nx)).tolist()
+    for i in tqdm(range(nx)):
         for j in range(ny):
             # get grid size δx and δy
             dx, dy = dx_ls[i] * 0.5, dy_ls[j] * 0.5
             xc = x_origin + xc_ls[i]
             yc = y_origin - yc_ls[j]
+            lngc, latc = transformer_inv.transform(xc, yc)
+            lat_2d[j][i] = latc
+            lng_2d[j][i] = lngc
+
             # get DEM data within the grid size
             bounds = (xc - dx, xc + dx, yc - dy, yc + dy)
             _, _, elv_dem_tmp = __clip_xy(x_dem_arr, y_dem_arr, elv_dem_arr, bounds)
@@ -320,9 +315,9 @@ def generate_topo(
                     # below bottom of the lake
                     else:
                         topo_idx = IDX_LAND
-                topo_ls.append(topo_idx)
+                topo_ls[calc_m(i, j, k, nx, ny)] = topo_idx
 
-    return topo_ls
+    return topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc)
 
 
 def generate_act_ls(topo_ls: List[int]) -> List[int]:
@@ -369,7 +364,7 @@ def generamte_rocknum_and_props(
             elv_lake: float = None
             for m, _idx_tmp in enumerate(topo_ls):
                 if _idx_tmp == IDX_LAKE:
-                    _, _, k = __calc_ijk(m, nxyz[2], nxyz[1])
+                    _, _, k = calc_ijk(m, nxyz[0], nxyz[1])
                     elv_lake = top - sum(gz[: k + 1])
                     break
             _prop["a"] = P_GROUND - elv_lake * P_GRAD_AIR
@@ -735,60 +730,123 @@ if __name__ == "__main__":
     crs_rect = "epsg:6680"
     dxyz = (
         [
+            429.981696,
+            358.31808,
+            298.5984,
+            248.832,
+            207.36,
+            172.8,
+            144.0,
+            120.0,
             100.0,
+            86.4,
+            72.0,
+            60.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            60.0,
+            72.0,
+            86.4,
             100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
+            120.0,
+            144.0,
+            172.79999999999998,
+            207.35999999999999,
+            248.83199999999997,
+            298.59839999999997,
+            358.31807999999995,
+            429.98169599999994,
         ],
         [
+            429.981696,
+            358.31808,
+            298.5984,
+            248.832,
+            207.36,
+            172.8,
+            144.0,
+            120.0,
             100.0,
+            86.4,
+            72.0,
+            60.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            60.0,
+            72.0,
+            86.4,
             100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
-            100.0,
+            120.0,
+            144.0,
+            172.79999999999998,
+            207.35999999999999,
+            248.83199999999997,
+            298.59839999999997,
+            358.31807999999995,
+            429.98169599999994,
         ],
-        [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+        [
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+            50.0,
+        ],
+    )
+    # dxyz = (
+    #     [5000.0, 5000.0, 5000.0, 5000.0, 5000.0],
+    #     [5000.0, 5000.0, 5000.0, 5000.0, 5000.0],
+    #     [300.0, 300.0, 300.0, 300.0, 300.0],
+    # )  #!
+    assert len(dxyz[0]) * len(dxyz[1]) * len(dxyz[2]) < 25000, (
+        len(dxyz[0]) * len(dxyz[1]) * len(dxyz[2])
     )
     nxyz = (len(dxyz[0]), len(dxyz[1]), len(dxyz[2]))
     origin = (42.690559, 141.377357, 1041.0)
-    src_props = {"i": 10, "j": 10, "k": 11, "pres": 10.0, "tempe": 400.0, "comp1t": 0.5}
 
-    topo_ls = generate_topo(pth_dem, pth_sea, crs_rect, dxyz, origin, align_center=True)
+    topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = generate_topo(
+        pth_dem,
+        pth_sea,
+        crs_rect,
+        dxyz,
+        origin,
+        (42.691521, 141.376839, -400.0),
+        align_center=True,
+    )
+
+    # debug
+    plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
+
     actnum_ls = generate_act_ls(topo_ls)
 
     (
@@ -798,6 +856,14 @@ if __name__ == "__main__":
         rocknum_pres_grad,
     ) = generamte_rocknum_and_props(topo_ls, origin[2], nxyz, dxyz[2])
 
+    src_props = {
+        "i": isrc + 1,
+        "j": jsrc + 1,
+        "k": ksrc + 1,
+        "pres": 10.0,
+        "tempe": 700.0,
+        "comp1t": 0.5,
+    }
     generate_input(
         dxyz[0],
         dxyz[1],
