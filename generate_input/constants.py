@@ -1,7 +1,9 @@
 from pathlib import Path
 
 # lat0, lat1, lng0, lng1, Correction value (added to elevation value)
-BOUNDS = {"Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 255.0)}
+LAKE_BOUNDS = {
+    "Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 255.0)
+}
 
 # CRS of each toporogical data
 CRS_WGS84 = "epsg:4326"
@@ -29,52 +31,61 @@ CACHE_DEM_FILENAME = "dem.pickle"
 CACHE_SEA_FILENAME = "sea.pickle"
 
 # Conctsnt parameters
+# NOTE: unit of "HCONDCF" is W/(m・K), "PERM" is mD
 POROS = 0.2
 TOPO_CONST_PROPS = {
-    IDX_LAND: (
-        "HCONDCFX  2.",
-        "HCONDCFY  2.",
-        "HCONDCFZ  2.",
-        f"PORO   {POROS}",
-        "PERMX     100",
-        "PERMY     100",
-        "PERMZ     100",
-    ),
-    IDX_SEA: (
-        "HCONDCFX  0.6",
-        "HCONDCFY  0.6",
-        "HCONDCFZ  0.6",
-        "PORO   0.99",
-        "PERMX     0.1",
-        "PERMY     0.1",
-        "PERMZ     0.1",
-    ),
-    IDX_AIR: (
-        "HCONDCFX  0.6",
-        "HCONDCFY  0.6",
-        "HCONDCFZ  0.6",
-        "PORO   0.99",
-        "PERMX     0.1",
-        "PERMY     0.1",
-        "PERMZ     0.1",
-    ),
-    IDX_LAKE: (
-        "HCONDCFX  0.6",
-        "HCONDCFY  0.6",
-        "HCONDCFZ  0.6",
-        "PORO   0.99",
-        "PERMX     0.1",
-        "PERMY     0.1",
-        "PERMZ     0.1",
-    ),
+    IDX_LAND: {
+        "HCONDCFX": 2.0,
+        "HCONDCFY": 2.0,
+        "HCONDCFZ": 2.0,
+        "PORO": POROS,
+        "PERMX": 100,
+        "PERMY": 100,
+        "PERMZ": 100,
+        "DENS": 2900.0,
+        "HC": 0.84,
+    },
+    IDX_SEA: {
+        "HCONDCFX": 0.6,
+        "HCONDCFY": 0.6,
+        "HCONDCFZ": 0.6,
+        "PORO": 0.9,
+        "PERMX": 0.1,
+        "PERMY": 0.1,
+        "PERMZ": 0.1,
+        "DENS": 1020.0,
+        "HC": 3.9,
+    },
+    IDX_AIR: {
+        "HCONDCFX": 0.0241,
+        "HCONDCFY": 0.0241,
+        "HCONDCFZ": 0.0241,
+        "PORO": 0.9,
+        "PERMX": 0.1,
+        "PERMY": 0.1,
+        "PERMZ": 0.1,
+        "DENS": 1.293,
+        "HC": 1.007,
+    },
+    IDX_LAKE: {
+        "HCONDCFX": 0.6,
+        "HCONDCFY": 0.6,
+        "HCONDCFZ": 0.6,
+        "PORO": 0.9,
+        "PERMX": 0.1,
+        "PERMY": 0.1,
+        "PERMZ": 0.1,
+        "DENS": 1000.0,
+        "HC": 4.182,
+    },
 }
 
 # Initial parameters
 TOPO_INIT_PROPS = {
-    IDX_LAND: ("   TEMPC   100.0", "   COMP1T  0.3"),
-    IDX_SEA: ("   TEMPC   20.0", "   COMP1T  0.3"),
-    IDX_AIR: ("   TEMPC   20.0", "   COMP1T  0.3"),
-    IDX_LAKE: ("   TEMPC   20.0", "   COMP1T  0.3"),
+    IDX_LAND: ("   TEMPC   60.0", "   COMP1T  0.2"),
+    IDX_SEA: ("   TEMPC   20.0", "   COMP1T  0.0"),
+    IDX_AIR: ("   TEMPC   20.0", "   COMP1T  0.0"),
+    IDX_LAKE: ("   TEMPC   20.0", "   COMP1T  0.0"),
 }
 
 # Grain density (kg/m3)
@@ -94,3 +105,5 @@ P_GRAD_AIR = 9.0e-6
 P_GRAD_SEA = 1.02e-3
 P_GRAD_LAKE = 1.0e-3
 P_GRAD_ROCK = (DENS_ROCK * (1.0 - POROS) + DENS_WATER * POROS) * 1.0e-6
+
+P_BOTTOM = P_GRAD_ROCK * 1000.0

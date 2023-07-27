@@ -5,3 +5,4 @@
 *.xyz
 *.pl
 *.RUN
+generate_input/test/*

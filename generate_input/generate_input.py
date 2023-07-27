@@ -15,11 +15,10 @@ from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from plt_topo import plt_topo
-from utils import calc_ijk, calc_m
+from utils import calc_ijk, calc_m, plt_topo
 
 from constants import (
-    BOUNDS,
+    LAKE_BOUNDS,
     RES_DEM,
     RES_SEA,
     RES_LAKE,
@@ -36,18 +35,15 @@ from constants import (
     CACHE_SEA_FILENAME,
     TOPO_CONST_PROPS,
     TOPO_INIT_PROPS,
-    DENS_ROCK,
-    HC_ROCK,
     P_GROUND,
     P_GRAD_AIR,
     P_GRAD_SEA,
     P_GRAD_LAKE,
     P_GRAD_ROCK,
+    P_BOTTOM,
 )
 
 # TODO: 天水の量をtimestepごとに調整する
-# TODO: 入力：グリッド, モデルパラメータ（timestepごとの流入量, 浸透率, CO2分率とする）
-# TODO: generate using 10km × 10km DEM (10m)
 
 
 def __clip_xy(
@@ -71,7 +67,7 @@ def __clip_lake(_lat: List, _lng: List, _elv: List) -> Tuple[List, List, List]:
     elv_arr = np.array(_elv)
     lat_lake, lng_lake, elv_lake = [], [], []
     lat_sea, lng_sea, elv_sea = [], [], []
-    for _, (lat0, lat1, lng0, lng1, dh) in BOUNDS.items():
+    for _, (lat0, lat1, lng0, lng1, dh) in LAKE_BOUNDS.items():
         filt = (lat0 < lat_arr) * (lat_arr < lat1) * (lng0 < lng_arr) * (lng_arr < lng1)
         lat_lake.extend(lat_arr[filt].tolist())
         lng_lake.extend(lng_arr[filt].tolist())
@@ -355,7 +351,7 @@ def generamte_rocknum_and_props(
     for _idx in topo_unique:
         _prop = rocknum_pgrad.setdefault(topo_rocknum_map[_idx], {})
         if _idx == IDX_LAND:
-            _prop["a"] = 0.0
+            _prop["a"] = P_GROUND
             _prop["b"] = P_GRAD_ROCK
         if _idx == IDX_AIR:
             _prop["a"] = P_GROUND - top * P_GRAD_AIR
@@ -375,6 +371,46 @@ def generamte_rocknum_and_props(
     return rocknum_ls, rocknum_consts, rocknum_inits, rocknum_pgrad
 
 
+def calc_sattab(method="corey") -> Dict:
+    satab: Tuple = None
+    if method == "corey":
+        slr = 0.33
+        sgr = 0.05
+        sl_ls = np.linspace(0.0, 1.0, 20).tolist()
+        kl_ls, kg_ls = [], []
+        for sl in sl_ls:
+            s = (sl - slr) / (1.0 - slr - sgr)
+            kl = s**4
+            kg = (1.0 - s**2) * (1.0 - s) ** 2
+            kl_ls.append(kl)
+            kg_ls.append(kg)
+        satab = (sl_ls, kl_ls, kg_ls)
+    else:
+        # default settings described in Manual
+        # krliq=sliq^3, krgas=(1-sliq)^2
+        sl_ls = [0.0, 0.1, 0.2, 0.4, 0.6, 0.8, 0.9, 1.0]
+        kl_ls = [0.0, 0.001, 0.008, 0.064, 0.216, 0.512, 0.729, 1.0]
+        kg_ls = [1.0, 0.81, 0.64, 0.36, 0.16, 0.04, 0.01, 0.0]
+        satab = (sl_ls, kl_ls, kg_ls)
+    return satab
+
+
+def get_air_bounds(topo_ls, nxyz):
+    nx, ny, _ = nxyz
+    m_bounds: List = []
+    for m, _idx in enumerate(topo_ls):
+        if _idx != IDX_LAND:
+            continue
+        i, j, k = calc_ijk(m, nx, ny)
+        m_above = calc_m(i, j, k - 1, nx, ny)
+        if k == 0:
+            m_bounds.append(m)
+            continue
+        if topo_ls[m_above] == IDX_AIR:
+            m_bounds.append(m)
+    return m_bounds
+
+
 def write(_f: TextIO, _string: str):
     _string += "\n"
     _f.write(_string)
@@ -385,13 +421,16 @@ def generate_input(
     gy: List,
     gz: List,
     act_ls: List,
-    rocknum_ls: List,
+    rocknum_ls,
     rocknum_consts: Dict,
     rocknum_params: Dict,
     rocknum_pres_grad: Dict,
+    m_airbounds: List[int],
+    sattab: Tuple,
     src_props: Dict,
     fpth: str,
 ):
+    fluxnum = 100
     with open(fpth, "w", encoding="utf-8") as _f:
         __write: Callable = partial(write, _f)
 
@@ -470,11 +509,25 @@ def generate_input(
         __write("")  # \n
 
         # BOUNDARY
-        # TODO
         __write("BOUNDARY                               We define the boundaries:")
+        # __write(f"   2   6* 'I-'  'I+'  'J-'  'J+'  2* INFTHIN /    <- Aquifer")
+        # __write(
+        #     f"   3   6* 'K-'  5*                   INFTHIN   4* 1* 2 /    <- Top boundary"
+        # )
         __write(
-            f"   102   1 {len(gx)} 1 {len(gy)} {len(gz)} {len(gz)} 'K+' 5* INFTHIN 4* 2 2 /    the bottom bound. marked as FLUXNUM=102/"
+            f"   102   6* 'K+'  5*                   INFTHIN   4* 2  2 /    <- Bottom boundary"
         )
+        # AIR - LAND boundary
+        # nx, ny, _ = nxyz
+        # for m in m_airbounds:
+        #     i, j, k = calc_ijk(m, nx, ny)
+        #     i += 1
+        #     j += 1
+        #     k += 1
+        #     __write(
+        #         f"   {fluxnum}   {i}   {i+1}   {j}   {j+1}   {k}   {k}   6* 'K-'  5*                   INFTHIN   4* 1* 2 /"
+        #     )
+        # fluxnum += 1
         __write("/")
         __write("")
 
@@ -496,8 +549,11 @@ def generate_input(
             "EQUALREG                              We specify uniform distributions:"
         )
         for rocknum, props in rocknum_consts.items():
-            for _str in props:
-                __write(_str + " " + f"ROCKNUM {rocknum}  /")
+            for k, v in props.items():
+                # DENS and HC should be written in ROCKDH section
+                if k in ("DENS", "HC"):
+                    continue
+                __write(f"{k} {v}" + " " + f"ROCKNUM {rocknum}  /")
         __write("/")
         __write("")  # \n
 
@@ -515,17 +571,18 @@ def generate_input(
         __write("")  # \n
 
         # ROCK
-        for rocknum in list(set(rocknum_ls)):
+        for idx, prop in rocknum_consts.items():
+            dens, hc = prop["DENS"], prop["HC"]
             __write(
                 "          Rock properties are specified within brackets ROCK-ENDROCK"
             )
             __write(
                 "ROCK      <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
             )
-            __write(f"  {rocknum} /")
+            __write(f"  {idx} /")
             __write("ROCKDH                                  We specify that")
             __write(
-                f"  {DENS_ROCK}  {HC_ROCK} /                          rock density is 2900 kg/m3, rock heat capacity is 0.84 kJ/kg/K"
+                f"  {dens}  {hc} /                          rock density is {dens} kg/m3, rock heat capacity is {hc} kJ/kg/K"
             )
             __write("")  # \n
 
@@ -550,7 +607,6 @@ def generate_input(
         __write("")  # \n
 
         # SAT
-        # TODO: confirm
         __write(
             "         The relative permeabilities are specified within brackets SAT-ENDSAT"
         )
@@ -562,14 +618,18 @@ def generate_input(
 
         # SATTAB
         __write("SATTAB")
-        __write("    0.0    0.0   1.0  /           krliq=sliq^3")
-        __write("    0.1    0.001 0.81 /           krgas=(1-sliq)^2")
-        __write("    0.2    0.008 0.64 /")
-        __write("    0.4    0.064 0.36 /")
-        __write("    0.6    0.216 0.16 /")
-        __write("    0.8    0.512 0.04 /")
-        __write("    0.9    0.729 0.01 /")
-        __write("    1.0    1.0   0.0  /")
+        if satab is None:
+            __write("    0.0    0.0   1.0  /           krliq=sliq^3")
+            __write("    0.1    0.001 0.81 /           krgas=(1-sliq)^2")
+            __write("    0.2    0.008 0.64 /")
+            __write("    0.4    0.064 0.36 /")
+            __write("    0.6    0.216 0.16 /")
+            __write("    0.8    0.512 0.04 /")
+            __write("    0.9    0.729 0.01 /")
+            __write("    1.0    1.0   0.0  /")
+        else:
+            for sl, kl, kg in zip(*sattab):
+                __write(f"    {sl}    {kl}    {kg}  /")
         __write("/")
         __write("")  # \n
 
@@ -614,7 +674,7 @@ def generate_input(
         __write("ECHO      Enables more information output in the LOG-file")
         __write("")  # \n
 
-        # OPERAREG
+        # OPERAREG (set initial value)
         __write("OPERAREG")
         for rocknum, prop in rocknum_pres_grad.items():
             a, b = prop["a"], prop["b"]
@@ -627,8 +687,9 @@ def generate_input(
         for rocknum, params in rocknum_params.items():
             for _str in params:
                 __write(_str + "  " + f"ROCKNUM  {rocknum}  /")
+
         __write(
-            "   TEMPC   200 FLUXNUM 102 /     The temperature of the bottom boundary is 200 C"
+            f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
         )
         __write("/")
         __write("")  # \n
@@ -650,6 +711,11 @@ def generate_input(
         )
         __write("")  # \n
 
+        #  RPTSRC
+        __write("RPTSRC")
+        __write("  SMIR#1 SMIR#2 SMIT#1 SMIT#2 /")
+        __write("")  # \n
+
         # SCHEDULE
         __write(
             "SCHEDULE   #################### SCHEDULE section begins here ####################"
@@ -658,20 +724,18 @@ def generate_input(
 
         # SRCINJE
         __write("SRCINJE")
-        __write("  ’MAGMASRC’ MASS 1* 25. 1* 500. /")
+        __write("  ’MAGMASRC’ MASS 1* 50. 1* 2000. /")
         __write("/")
         __write("")  # \n
 
         # TUNING
-        # TODO:
         __write(
-            "TUNING                        We specify that the maximal timestep is 1000 days and the initial timestep is 0.1 days."
+            "TUNING                        We specify that the maximal timestep is 1000 days and the initial timestep is 0.01 days."
         )
-        __write("    1* 1000 0.1 /")
+        __write("    1* 1000 0.01 /")
         __write("")  # \n
 
         # TSTEP
-        # TODO:
         __write(
             "TSTEP                         We advance simulation to 100000 days reporting distributions every 1000 days."
         )
@@ -706,10 +770,6 @@ def generate_input(
             "END       #######################################################################"
         )
 
-
-import numpy as np
-from matplotlib import pyplot as plt
-from matplotlib import cm
 
 if __name__ == "__main__":
     # lat_dem_ls, lng_dem_ls, elv_dem_ls = load_dem("./dem")
@@ -823,11 +883,7 @@ if __name__ == "__main__":
             50.0,
         ],
     )
-    # dxyz = (
-    #     [5000.0, 5000.0, 5000.0, 5000.0, 5000.0],
-    #     [5000.0, 5000.0, 5000.0, 5000.0, 5000.0],
-    #     [300.0, 300.0, 300.0, 300.0, 300.0],
-    # )  #!
+
     assert len(dxyz[0]) * len(dxyz[1]) * len(dxyz[2]) < 25000, (
         len(dxyz[0]) * len(dxyz[1]) * len(dxyz[2])
     )
@@ -848,7 +904,6 @@ if __name__ == "__main__":
     plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
 
     actnum_ls = generate_act_ls(topo_ls)
-
     (
         rocknum_ls,
         rocknum_consts,
@@ -856,13 +911,19 @@ if __name__ == "__main__":
         rocknum_pres_grad,
     ) = generamte_rocknum_and_props(topo_ls, origin[2], nxyz, dxyz[2])
 
+    # get boundary region
+    m_airbounds = get_air_bounds(topo_ls, nxyz)
+
+    # relative permeability
+    satab = calc_sattab(method="None")
+
     src_props = {
         "i": isrc + 1,
         "j": jsrc + 1,
         "k": ksrc + 1,
-        "pres": 10.0,
+        "pres": 50.0,
         "tempe": 700.0,
-        "comp1t": 0.5,
+        "comp1t": 0.2,
     }
     generate_input(
         dxyz[0],
@@ -873,6 +934,8 @@ if __name__ == "__main__":
         rocknum_consts,
         rocknum_inits,
         rocknum_pres_grad,
+        m_airbounds,
+        satab,
         src_props,
         "tmp2.RUN",
     )
