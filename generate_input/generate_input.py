@@ -42,8 +42,21 @@ from constants import (
     P_GRAD_ROCK,
     P_BOTTOM,
 )
+from params import (
+    DEM_PTH,
+    SEADEM_PTH,
+    CRS_RECT,
+    RUNFILE_PTH,
+    ALIGN_CENTER,
+    DXYZ,
+    ORIGIN,
+    POS_SRC,
+    PRES_SRC,
+    SRC_TEMP,
+    SRC_COMP1T,
+)
 
-# TODO: 天水の量をtimestepごとに調整する
+# TODO: 天水のinput
 
 
 def __clip_xy(
@@ -197,6 +210,7 @@ def generate_topo(
     if align_center:
         xc_ls = __stack_from_center(dx_ls)
         yc_ls = __stack_from_center(dy_ls)
+        print(xc_ls, yc_ls)
         zc_ls = __stack_from_0(dz_ls)
     else:
         xc_ls = __stack_from_0(dx_ls)
@@ -772,132 +786,19 @@ def generate_input(
 
 
 if __name__ == "__main__":
-    # lat_dem_ls, lng_dem_ls, elv_dem_ls = load_dem("./dem")
-    # lat_arr = np.array(lat_dem_ls)[::100]
-    # lng_arr = np.array(lng_dem_ls)[::100]
-    # elv_arr = np.array(elv_dem_ls)[::100]
-    # fig, ax = plt.subplots()
-    # elv_min = elv_arr.min()
-    # # print([i / elv_min for i in elv_lake])
-    # # colors = [cm.jet(i / elv_min) for i in elv_lake]
-    # mappable = ax.scatter(lng_arr, lat_arr, c=elv_arr, cmap="coolwarm")
-    # fig.colorbar(mappable)
-    # plt.show()
-
-    #! INPUT
-    pth_dem = "./dem"
-    pth_sea = "./seadem"
-    crs_rect = "epsg:6680"
-    dxyz = (
-        [
-            429.981696,
-            358.31808,
-            298.5984,
-            248.832,
-            207.36,
-            172.8,
-            144.0,
-            120.0,
-            100.0,
-            86.4,
-            72.0,
-            60.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            60.0,
-            72.0,
-            86.4,
-            100.0,
-            120.0,
-            144.0,
-            172.79999999999998,
-            207.35999999999999,
-            248.83199999999997,
-            298.59839999999997,
-            358.31807999999995,
-            429.98169599999994,
-        ],
-        [
-            429.981696,
-            358.31808,
-            298.5984,
-            248.832,
-            207.36,
-            172.8,
-            144.0,
-            120.0,
-            100.0,
-            86.4,
-            72.0,
-            60.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            60.0,
-            72.0,
-            86.4,
-            100.0,
-            120.0,
-            144.0,
-            172.79999999999998,
-            207.35999999999999,
-            248.83199999999997,
-            298.59839999999997,
-            358.31807999999995,
-            429.98169599999994,
-        ],
-        [
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-            50.0,
-        ],
+    assert len(DXYZ[0]) * len(DXYZ[1]) * len(DXYZ[2]) < 25000, (
+        len(DXYZ[0]) * DXYZ(DXYZ[1]) * DXYZ(DXYZ[2])
     )
-
-    assert len(dxyz[0]) * len(dxyz[1]) * len(dxyz[2]) < 25000, (
-        len(dxyz[0]) * len(dxyz[1]) * len(dxyz[2])
-    )
-    nxyz = (len(dxyz[0]), len(dxyz[1]), len(dxyz[2]))
-    origin = (42.690559, 141.377357, 1041.0)
+    nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
 
     topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = generate_topo(
-        pth_dem,
-        pth_sea,
-        crs_rect,
-        dxyz,
-        origin,
-        (42.691521, 141.376839, -400.0),
-        align_center=True,
+        DEM_PTH,
+        SEADEM_PTH,
+        CRS_RECT,
+        DXYZ,
+        ORIGIN,
+        POS_SRC,
+        align_center=ALIGN_CENTER,
     )
 
     # debug
@@ -909,7 +810,7 @@ if __name__ == "__main__":
         rocknum_consts,
         rocknum_inits,
         rocknum_pres_grad,
-    ) = generamte_rocknum_and_props(topo_ls, origin[2], nxyz, dxyz[2])
+    ) = generamte_rocknum_and_props(topo_ls, ORIGIN[2], nxyz, DXYZ[2])
 
     # get boundary region
     m_airbounds = get_air_bounds(topo_ls, nxyz)
@@ -921,14 +822,14 @@ if __name__ == "__main__":
         "i": isrc + 1,
         "j": jsrc + 1,
         "k": ksrc + 1,
-        "pres": 50.0,
-        "tempe": 700.0,
-        "comp1t": 0.2,
+        "pres": PRES_SRC,
+        "tempe": SRC_TEMP,
+        "comp1t": SRC_COMP1T,
     }
     generate_input(
-        dxyz[0],
-        dxyz[1],
-        dxyz[2],
+        DXYZ[0],
+        DXYZ[1],
+        DXYZ[2],
         actnum_ls,
         rocknum_ls,
         rocknum_consts,
@@ -937,5 +838,5 @@ if __name__ == "__main__":
         m_airbounds,
         satab,
         src_props,
-        "tmp2.RUN",
+        RUNFILE_PTH,
     )
