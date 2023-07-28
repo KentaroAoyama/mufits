@@ -26,7 +26,7 @@ IDX_LAKE = 2
 IDX_AIR = 3
 
 # PATH
-CACHE_DIR = Path.cwd()
+CACHE_DIR = Path.cwd().joinpath("cache")
 CACHE_DEM_FILENAME = "dem.pickle"
 CACHE_SEA_FILENAME = "sea.pickle"
 

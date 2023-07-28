@@ -210,7 +210,6 @@ def generate_topo(
     if align_center:
         xc_ls = __stack_from_center(dx_ls)
         yc_ls = __stack_from_center(dy_ls)
-        print(xc_ls, yc_ls)
         zc_ls = __stack_from_0(dz_ls)
     else:
         xc_ls = __stack_from_0(dx_ls)
@@ -791,15 +790,28 @@ if __name__ == "__main__":
     )
     nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
 
-    topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = generate_topo(
-        DEM_PTH,
-        SEADEM_PTH,
-        CRS_RECT,
-        DXYZ,
-        ORIGIN,
-        POS_SRC,
-        align_center=ALIGN_CENTER,
-    )
+    cache_topo = CACHE_DIR.joinpath("topo_ls")
+    topo_ls: List = None
+    lat_2d, lng_2d, isrc, jsrc, ksrc = None, None, None, None, None
+    if cache_topo.exists():
+        with open(cache_topo, "rb") as pkf:
+            topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = pickle.load(pkf)
+    else:
+        topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = generate_topo(
+            DEM_PTH,
+            SEADEM_PTH,
+            CRS_RECT,
+            DXYZ,
+            ORIGIN,
+            POS_SRC,
+            align_center=ALIGN_CENTER,
+        )
+        with open(cache_topo, "wb") as pkf:
+            pickle.dump(
+                (topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc)),
+                pkf,
+                pickle.HIGHEST_PROTOCOL,
+            )
 
     # debug
     plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
