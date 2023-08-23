@@ -6,7 +6,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 import vtk
 
-from params import DXYZ, VLIM
+from constants import DXYZ
+from params import VLIM
 
 
 def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
@@ -27,7 +28,7 @@ def plt_topo(
     for m, idx in enumerate(topo_ls):
         i, j, k = calc_ijk(m, nx, ny)
         topo_3d[k][j][i] = idx
-
+    print(np.array(latc_ls).shape)
     basedir = Path(savedir)
     if not basedir.exists():
         makedirs(basedir)
@@ -41,44 +42,35 @@ def plt_topo(
         plt.close()
 
 
-def plt_vtk(
-    vtkpth: PathLike, xlim: Tuple = None, ylim: Tuple = None, zlim: Tuple = None
-) -> None:
-    reader = vtk.vtkXMLUnstructuredGridReader()
-    reader.SetFileName(vtkpth)
-    reader.Update()  # Needed because of GetScalarRange
-    vtk_data = reader.GetOutput()
-    cell2point = vtk.vtkCellDataToPointData()
-    cell2point.SetInputData(reader.GetOutput())
-    cell2point.Update()
-    coord = vtk.utils.numpy_support.vtk_to_numpy(
-        cell2point.GetOutput().GetPoints().GetData()
-    )
-    # vtk_array = vtk_data.GetPointData().GetArray("PHST")
-    # # vtk_array_shape = vtk_array.GetDimensions()[::-1]
-    # numpy_array = np.array(vtk_array)
-    # print(numpy_array)
-    # # numpy_array = numpy_array.reshape(vtk_array_shape, order="F")v
+def plt_airbounds(
+    topo_ls: List,
+    m_airbounds,
+    latc_ls: List,
+    lngc_ls: List,
+    nxyz: Tuple[int],
+    savedir: PathLike,
+):
+    nx, ny, nz = nxyz
+    topo_3d = np.zeros(shape=(nz, ny, nx)).tolist()
+    for m, idx in enumerate(topo_ls):
+        i, j, k = calc_ijk(m, nx, ny)
+        topo_3d[k][j][i] = idx
 
+    for m in m_airbounds:
+        i, j, k = calc_ijk(m, nx, ny)
+        topo_3d[k][j][i] = 100
 
-import xml.etree.ElementTree as ET
-
-
-def parse_vtu_file(file_path):
-    tree = ET.parse(file_path)
-    root = tree.getroot()
-
-    # データ配列を格納するリスト
-    data_arrays = []
-
-    # データ配列の名前を取得
-    for data_array in root.findall(".//DataArray"):
-        name = data_array.attrib.get("Name")
-        data = data_array.text.strip().split()
-        data = np.array(data, dtype=float)
-        data_arrays.append((name, data))
-    print(data_arrays)
-    return data_arrays
+    basedir = Path(savedir)
+    if not basedir.exists():
+        makedirs(basedir)
+    for k, val in enumerate(topo_3d):
+        fpth = basedir.joinpath(str(k))
+        fig, ax = plt.subplots()
+        mappable = ax.pcolormesh(lngc_ls, latc_ls, np.array(val), cmap="jet")
+        fig.colorbar(mappable=mappable)
+        fig.savefig(fpth, dpi=200)
+        plt.clf()
+        plt.close()
 
 
 def vtu_to_numpy(vtu_file_path):
@@ -185,9 +177,9 @@ def plt_result(values, coordinates, vmin, vmax, outdir):
 
 
 if __name__ == "__main__":
-    coordinates, arrays = vtu_to_numpy("./test/tmp2.0040.vtu")
+    coordinates, arrays = vtu_to_numpy("./test/tmp2.0010.vtu")
     print(coordinates.shape)
-    result_dir = Path("./result/40")
+    result_dir = Path("./result/10_05")
     print(arrays.keys())
     for key, val in arrays.items():
         print("===")

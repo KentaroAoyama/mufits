@@ -15,9 +15,15 @@ from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from utils import calc_ijk, calc_m, plt_topo
+from utils import calc_ijk, calc_m, plt_topo, plt_airbounds
 
 from constants import (
+    DEM_PTH,
+    SEADEM_PTH,
+    CRS_RECT,
+    RUNFILE_PTH,
+    ALIGN_CENTER,
+    DXYZ,
     LAKE_BOUNDS,
     RES_DEM,
     RES_SEA,
@@ -34,29 +40,21 @@ from constants import (
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
     TOPO_CONST_PROPS,
-    TOPO_INIT_PROPS,
     P_GROUND,
     P_GRAD_AIR,
     P_GRAD_SEA,
     P_GRAD_LAKE,
     P_GRAD_ROCK,
-    P_BOTTOM,
 )
 from params import (
-    DEM_PTH,
-    SEADEM_PTH,
-    CRS_RECT,
-    RUNFILE_PTH,
-    ALIGN_CENTER,
-    DXYZ,
     ORIGIN,
     POS_SRC,
     PRES_SRC,
     SRC_TEMP,
     SRC_COMP1T,
+    RAIN_AMOUNT,
+    P_BOTTOM,
 )
-
-# TODO: 天水のinput
 
 
 def __clip_xy(
@@ -140,6 +138,10 @@ def __stack_from_center(_ls: List[float]) -> List[float]:
         c_ls.append(sum_left)
         sum_left += _d * 0.5
     return c_ls
+
+
+def __generate_rain_src_id(idx: int):
+    return "R" + "{:07d}".format(idx)
 
 
 def generate_topo(
@@ -352,13 +354,11 @@ def generamte_rocknum_and_props(
             topo_unique.append(_idx)  # must maintain order
     topo_rocknum_map = {_idx: rocknum for rocknum, _idx in enumerate(topo_unique)}
     rocknum_ls = []
-    rocknum_consts = {}
-    rocknum_inits = {}
+    rocknum_params = {}
     for _idx in topo_ls:
         rocknum = topo_rocknum_map[_idx]
         rocknum_ls.append(rocknum)
-        rocknum_consts.setdefault(rocknum, TOPO_CONST_PROPS[_idx])
-        rocknum_inits.setdefault(rocknum, TOPO_INIT_PROPS[_idx])
+        rocknum_params.setdefault(rocknum, TOPO_CONST_PROPS[_idx])
 
     rocknum_pgrad = {}
     for _idx in topo_unique:
@@ -381,7 +381,7 @@ def generamte_rocknum_and_props(
         if _idx == IDX_SEA:
             _prop["a"] = P_GROUND
             _prop["b"] = P_GRAD_SEA
-    return rocknum_ls, rocknum_consts, rocknum_inits, rocknum_pgrad
+    return rocknum_ls, rocknum_params, rocknum_pgrad
 
 
 def calc_sattab(method="corey") -> Dict:
@@ -435,7 +435,6 @@ def generate_input(
     gz: List,
     act_ls: List,
     rocknum_ls,
-    rocknum_consts: Dict,
     rocknum_params: Dict,
     rocknum_pres_grad: Dict,
     m_airbounds: List[int],
@@ -443,9 +442,13 @@ def generate_input(
     src_props: Dict,
     fpth: str,
 ):
-    fluxnum = 100
     with open(fpth, "w", encoding="utf-8") as _f:
         __write: Callable = partial(write, _f)
+
+        # LISENCE
+        __write("LICENSE")
+        __write("  './LICENSE.LIC' /")
+        __write("")  # \n
 
         # RUNSPEC
         __write(
@@ -544,10 +547,17 @@ def generate_input(
         __write("/")
         __write("")
 
-        # SRCSPECG
+        # SRCSPECG (MAGMASRC and RAINSRC)
         __write("SRCSPECG")
+        # MAGMASRC
         srci, srcj, srck = src_props["i"], src_props["j"], src_props["k"]
         __write(f" ’MAGMASRC’ {srci} {srcj} {srck} /")
+        # RAINSRC
+        nx, ny, _ = nxyz
+        for idx, m in enumerate(m_airbounds):
+            i, j, k = calc_ijk(m, nx, ny)
+            srcid: str = __generate_rain_src_id(idx)
+            __write(f" ’{idx}’ {i+1} {j+1} {k+1} /")
         __write("/")
         __write("")
 
@@ -561,10 +571,10 @@ def generate_input(
         __write(
             "EQUALREG                              We specify uniform distributions:"
         )
-        for rocknum, props in rocknum_consts.items():
+        for rocknum, props in rocknum_params.items():
             for k, v in props.items():
                 # DENS and HC should be written in ROCKDH section
-                if k in ("DENS", "HC"):
+                if k in ("DENS", "HC", "TEMPC", "COMP1T"):
                     continue
                 __write(f"{k} {v}" + " " + f"ROCKNUM {rocknum}  /")
         __write("/")
@@ -584,7 +594,7 @@ def generate_input(
         __write("")  # \n
 
         # ROCK
-        for idx, prop in rocknum_consts.items():
+        for idx, prop in rocknum_params.items():
             dens, hc = prop["DENS"], prop["HC"]
             __write(
                 "          Rock properties are specified within brackets ROCK-ENDROCK"
@@ -696,11 +706,25 @@ def generate_input(
         __write("")  # \n
 
         # EQUALREG
-        __write("EQUALREG")
-        for rocknum, params in rocknum_params.items():
-            for _str in params:
-                __write(_str + "  " + f"ROCKNUM  {rocknum}  /")
-
+        __write(
+            "EQUALREG                              We specify uniform distributions:"
+        )
+        for rocknum, props in rocknum_params.items():
+            for k, v in props.items():
+                # DENS and HC should be written in ROCKDH section
+                if k in (
+                    "DENS",
+                    "HC",
+                    "HCONDCFX",
+                    "HCONDCFY",
+                    "HCONDCFZ",
+                    "PORO",
+                    "PERMX",
+                    "PERMY",
+                    "PERMZ",
+                ):
+                    continue
+                __write(f"{k} {v}" + " " + f"ROCKNUM {rocknum}  /")
         __write(
             f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
         )
@@ -709,10 +733,17 @@ def generate_input(
 
         # EQUALNAM
         __write("EQUALNAM")
+        # MAGMASRC
         pres, tempe, comp1t = src_props["pres"], src_props["tempe"], src_props["comp1t"]
         __write(f"  PRES {pres} ’MAGMASRC’ /")
         __write(f"  TEMPC {tempe} ’MAGMASRC’/")
         __write(f"  COMP1T {comp1t} ’MAGMASRC’/")
+        # RAINSRC
+        for idx in range(len(m_airbounds)):
+            srcid: str = __generate_rain_src_id(idx)
+            __write(f"  PRES 0.1 ’{idx}’ /")
+            __write(f"  TEMPC {20.0} ’{idx}’ /")  # TODO? from const or params
+            __write(f"  COMP1T {0.0} ’{idx}’ /")
         __write("/")
         __write("")  # \n
         __write("")  # \n
@@ -738,6 +769,11 @@ def generate_input(
         # SRCINJE
         __write("SRCINJE")
         __write("  ’MAGMASRC’ MASS 1* 50. 1* 2000. /")
+        for idx, m in enumerate(m_airbounds):
+            i, j, k = calc_ijk(m, nx, ny)
+            mass = 1.0e-3 * RAIN_AMOUNT * gx[i] * gy[j]  # t/day
+            srcid = __generate_rain_src_id(idx)
+            __write(f"  ’{idx}’ MASS 1* 10. 1* {mass} /")
         __write("/")
         __write("")  # \n
 
@@ -785,9 +821,6 @@ def generate_input(
 
 
 if __name__ == "__main__":
-    assert len(DXYZ[0]) * len(DXYZ[1]) * len(DXYZ[2]) < 25000, (
-        len(DXYZ[0]) * DXYZ(DXYZ[1]) * DXYZ(DXYZ[2])
-    )
     nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
 
     cache_topo = CACHE_DIR.joinpath("topo_ls")
@@ -819,13 +852,14 @@ if __name__ == "__main__":
     actnum_ls = generate_act_ls(topo_ls)
     (
         rocknum_ls,
-        rocknum_consts,
-        rocknum_inits,
+        rocknum_params,
         rocknum_pres_grad,
     ) = generamte_rocknum_and_props(topo_ls, ORIGIN[2], nxyz, DXYZ[2])
 
     # get boundary region
     m_airbounds = get_air_bounds(topo_ls, nxyz)
+    # debug
+    # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
 
     # relative permeability
     satab = calc_sattab(method="None")
@@ -844,8 +878,7 @@ if __name__ == "__main__":
         DXYZ[2],
         actnum_ls,
         rocknum_ls,
-        rocknum_consts,
-        rocknum_inits,
+        rocknum_params,
         rocknum_pres_grad,
         m_airbounds,
         satab,
