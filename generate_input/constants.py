@@ -1,5 +1,8 @@
 from pathlib import Path
 
+ORIGIN = (42.690531, 141.376630, 1041.0)
+POS_SRC = (42.691753, 141.375653, -400.0)
+
 # lat0, lat1, lng0, lng1, Correction value (added to elevation value)
 LAKE_BOUNDS = {
     "Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 255.0)
@@ -24,6 +27,7 @@ IDX_LAND = 0
 IDX_SEA = 1
 IDX_LAKE = 2
 IDX_AIR = 3
+IDX_VENT = 4
 
 # PATH
 DEM_PTH = "./dem"
@@ -151,19 +155,33 @@ DXYZ = (
 # Conctsnt parameters
 # NOTE: unit of "HCONDCF" is W/(m・K), "PERM" is mD
 POROS = 0.2
+PERM_HOST = 1.0e-16 / 9.869233e-10
 TOPO_CONST_PROPS = {
     IDX_LAND: {
         "HCONDCFX": 2.0,
         "HCONDCFY": 2.0,
         "HCONDCFZ": 2.0,
         "PORO": POROS,
-        "PERMX": 100,
-        "PERMY": 100,
-        "PERMZ": 100,
+        "PERMX": PERM_HOST,
+        "PERMY": PERM_HOST,
+        "PERMZ": PERM_HOST,
         "DENS": 2900.0,
         "HC": 0.84,
-        "TEMPC": 60.0,
-        "COMP1T": 0.0,
+        "TEMPC": 20.0,
+        "COMP1T": 0.0001,
+    },
+    IDX_VENT: {
+        "HCONDCFX": 2.0,
+        "HCONDCFY": 2.0,
+        "HCONDCFZ": 2.0,
+        "PORO": POROS,
+        "PERMX": 1000,
+        "PERMY": 1000,
+        "PERMZ": 1000,
+        "DENS": 2900.0,
+        "HC": 0.84,
+        "TEMPC": 20.0,
+        "COMP1T": 0.0001,
     },
     IDX_SEA: {
         "HCONDCFX": 0.6,
@@ -188,7 +206,7 @@ TOPO_CONST_PROPS = {
         "PERMZ": 0.0,
         "DENS": 1.293,
         "HC": 1.007,
-        "TEMPC": 20.0,
+        "TEMPC": 10.0,
         "COMP1T": 1.0,
     },
     IDX_LAKE: {
@@ -201,7 +219,7 @@ TOPO_CONST_PROPS = {
         "PERMZ": 0.1,
         "DENS": 1000.0,
         "HC": 4.182,
-        "TEMPC": 20.0,
+        "TEMPC": 10.0,
         "COMP1T": 0.0,
     },
 }
@@ -223,3 +241,10 @@ P_GRAD_AIR = 9.0e-6
 P_GRAD_SEA = 1.02e-3
 P_GRAD_LAKE = 1.0e-3
 P_GRAD_ROCK = (DENS_ROCK * (1.0 - POROS) + DENS_WATER * POROS) * 1.0e-6
+
+# Time taken to reproduce steady state (in years)
+TIME_SS = 500
+# Initial time step (in days)
+TSTEP_INIT = 0.000001
+
+PREFIX = "tarumai"

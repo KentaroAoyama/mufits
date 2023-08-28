@@ -6,3 +6,4 @@
 *.pl
 *.RUN
 generate_input/test/*
+generate_input/tarumai/*

@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 import vtk
 
 from constants import DXYZ
-from params import VLIM
+from params import PARAMS_VTK
 
 
 def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
@@ -28,7 +28,6 @@ def plt_topo(
     for m, idx in enumerate(topo_ls):
         i, j, k = calc_ijk(m, nx, ny)
         topo_3d[k][j][i] = idx
-    print(np.array(latc_ls).shape)
     basedir = Path(savedir)
     if not basedir.exists():
         makedirs(basedir)
@@ -179,11 +178,16 @@ def plt_result(values, coordinates, vmin, vmax, outdir):
 if __name__ == "__main__":
     coordinates, arrays = vtu_to_numpy("./test/tmp2.0010.vtu")
     print(coordinates.shape)
-    result_dir = Path("./result/10_05")
+    result_dir = Path("./result/10_modified2")
     print(arrays.keys())
     for key, val in arrays.items():
+        if key == "PHST":
+            continue
+        #!
+        if key != "TEMPC (C)":
+            continue
         print("===")
         print(key)
         outdir = result_dir.joinpath(key)
-        vlim = VLIM[key]
+        vlim = PARAMS_VTK.VLIM[key]
         plt_result(val, coordinates, vlim[0], vlim[1], outdir)

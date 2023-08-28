@@ -7,7 +7,7 @@
 from functools import partial
 from typing import List, Tuple, Dict, TextIO, Callable
 from pathlib import Path
-from os import PathLike, makedirs
+from os import PathLike, makedirs, getcwd
 import pickle
 
 import pandas as pd
@@ -18,6 +18,8 @@ from tqdm import tqdm
 from utils import calc_ijk, calc_m, plt_topo, plt_airbounds
 
 from constants import (
+    ORIGIN,
+    POS_SRC,
     DEM_PTH,
     SEADEM_PTH,
     CRS_RECT,
@@ -36,6 +38,7 @@ from constants import (
     IDX_SEA,
     IDX_LAKE,
     IDX_AIR,
+    IDX_VENT,
     CACHE_DIR,
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
@@ -45,16 +48,11 @@ from constants import (
     P_GRAD_SEA,
     P_GRAD_LAKE,
     P_GRAD_ROCK,
+    TIME_SS,
+    TSTEP_INIT,
 )
-from params import (
-    ORIGIN,
-    POS_SRC,
-    PRES_SRC,
-    SRC_TEMP,
-    SRC_COMP1T,
-    RAIN_AMOUNT,
-    P_BOTTOM,
-)
+
+from params import PARAMS
 
 
 def __clip_xy(
@@ -142,6 +140,29 @@ def __stack_from_center(_ls: List[float]) -> List[float]:
 
 def __generate_rain_src_id(idx: int):
     return "R" + "{:07d}".format(idx)
+
+
+def generate_simple_vent(
+    topo_ls: List, xc_m: List, yc_m: List, elvc_m: List, vent_bounds: Dict
+) -> List:
+    topo_arr: np.ndarray = np.array(topo_ls)
+    xc_m: np.ndarray = np.array(xc_m)
+    yc_m: np.ndarray = np.array(yc_m)
+    elvc_m: np.ndarray = np.array(elvc_m)
+    zc_ls = __stack_from_0(DXYZ[2])
+    zc_arr = ORIGIN[2] - np.array(zc_ls)
+    for elvc, bounds in vent_bounds.items():
+        dz = DXYZ[2][np.argmin(np.square(zc_arr - elvc))]
+        filt = (
+            ((elvc - dz * 0.5) < elvc_m)
+            & (elvc_m < (elvc + dz * 0.5))
+            & (bounds[0] - 25.0 < xc_m)
+            & (xc_m < bounds[1] + 25.0)
+            & (bounds[2] - 25.0 < yc_m)
+            & (yc_m < bounds[3] + 25.0)
+        )
+        topo_arr = np.where(filt, IDX_VENT, topo_arr)
+    return topo_arr.tolist()
 
 
 def generate_topo(
@@ -252,6 +273,10 @@ def generate_topo(
     topo_ls: List[int] = np.zeros(shape=nz * ny * nx).tolist()
     lat_2d: List = np.zeros(shape=(ny, nx)).tolist()
     lng_2d: List = np.zeros(shape=(ny, nx)).tolist()
+    # center of the coordinates sorted for indecies "m"
+    xc_m: List[int] = np.zeros(shape=nz * ny * nx).tolist()
+    yc_m: List[int] = np.zeros(shape=nz * ny * nx).tolist()
+    zc_m: List[int] = np.zeros(shape=nz * ny * nx).tolist()
     for i in tqdm(range(nx)):
         for j in range(ny):
             # get grid size δx and δy
@@ -326,21 +351,24 @@ def generate_topo(
                     # below bottom of the lake
                     else:
                         topo_idx = IDX_LAND
-                topo_ls[calc_m(i, j, k, nx, ny)] = topo_idx
-
-    return topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc)
+                m = calc_m(i, j, k, nx, ny)
+                topo_ls[m] = topo_idx
+                xc_m[m] = xc_ls[i]
+                yc_m[m] = -yc_ls[j]
+                zc_m[m] = elvc
+    return topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, isrc, jsrc, ksrc)
 
 
 def generate_act_ls(topo_ls: List[int]) -> List[int]:
     actnum_ls = []
     for _idx in topo_ls:
         actnum: int = None
-        if _idx == IDX_LAND:
+        if _idx in (IDX_AIR, IDX_LAKE, IDX_SEA):
+            # inactivate
+            actnum = 2
+        else:
             # activate
             actnum = 1
-        else:
-            # inactive
-            actnum = 2
         actnum_ls.append(actnum)
     return actnum_ls
 
@@ -363,13 +391,10 @@ def generamte_rocknum_and_props(
     rocknum_pgrad = {}
     for _idx in topo_unique:
         _prop = rocknum_pgrad.setdefault(topo_rocknum_map[_idx], {})
-        if _idx == IDX_LAND:
-            _prop["a"] = P_GROUND
-            _prop["b"] = P_GRAD_ROCK
         if _idx == IDX_AIR:
             _prop["a"] = P_GROUND - top * P_GRAD_AIR
             _prop["b"] = P_GRAD_AIR
-        if _idx == IDX_LAKE:
+        elif _idx == IDX_LAKE:
             elv_lake: float = None
             for m, _idx_tmp in enumerate(topo_ls):
                 if _idx_tmp == IDX_LAKE:
@@ -378,9 +403,12 @@ def generamte_rocknum_and_props(
                     break
             _prop["a"] = P_GROUND - elv_lake * P_GRAD_AIR
             _prop["b"] = P_GRAD_LAKE
-        if _idx == IDX_SEA:
+        elif _idx == IDX_SEA:
             _prop["a"] = P_GROUND
             _prop["b"] = P_GRAD_SEA
+        else:
+            _prop["a"] = P_GROUND
+            _prop["b"] = P_GRAD_ROCK
     return rocknum_ls, rocknum_params, rocknum_pgrad
 
 
@@ -440,14 +468,16 @@ def generate_input(
     m_airbounds: List[int],
     sattab: Tuple,
     src_props: Dict,
-    fpth: str,
+    params: PARAMS,
+    fpth: PathLike,
 ):
     with open(fpth, "w", encoding="utf-8") as _f:
         __write: Callable = partial(write, _f)
 
         # LISENCE
         __write("LICENSE")
-        __write("  './LICENSE.LIC' /")
+        licpth = Path(getcwd(), "LICENSE.LIC")
+        __write(f"  '{licpth}' /")
         __write("")  # \n
 
         # RUNSPEC
@@ -455,6 +485,10 @@ def generate_input(
             "RUNSPEC   ################### RUNSPEC section begins here ######################"
         )
         __write("")  # \n
+
+        # Enable FAST option
+        __write("FAST")
+        __write("")
 
         # HCROCK
         __write("HCROCK                                  We enable heat conduction.")
@@ -526,37 +560,30 @@ def generate_input(
 
         # BOUNDARY
         __write("BOUNDARY                               We define the boundaries:")
+        srci, srcj, srck = src_props["i"], src_props["j"], src_props["k"]
         # __write(f"   2   6* 'I-'  'I+'  'J-'  'J+'  2* INFTHIN /    <- Aquifer")
         # __write(
         #     f"   3   6* 'K-'  5*                   INFTHIN   4* 1* 2 /    <- Top boundary"
         # )
+        # __write(
+        #     f"   102   6* 'K+'  5*                   INFTHIN   4* 2  2 /    <- Bottom boundary"
+        # )
+        # NOTE: Implicitly assumes the source is at the bottom.
         __write(
-            f"   102   6* 'K+'  5*                   INFTHIN   4* 2  2 /    <- Bottom boundary"
+            f"   100   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
         )
-        # AIR - LAND boundary
-        # nx, ny, _ = nxyz
-        # for m in m_airbounds:
-        #     i, j, k = calc_ijk(m, nx, ny)
-        #     i += 1
-        #     j += 1
-        #     k += 1
-        #     __write(
-        #         f"   {fluxnum}   {i}   {i+1}   {j}   {j+1}   {k}   {k}   6* 'K-'  5*                   INFTHIN   4* 1* 2 /"
-        #     )
-        # fluxnum += 1
+
         __write("/")
         __write("")
 
         # SRCSPECG (MAGMASRC and RAINSRC)
         __write("SRCSPECG")
         # MAGMASRC
-        srci, srcj, srck = src_props["i"], src_props["j"], src_props["k"]
         __write(f" ’MAGMASRC’ {srci} {srcj} {srck} /")
         # RAINSRC
-        nx, ny, _ = nxyz
+        nx, ny = len(DXYZ[0]), len(DXYZ[1])
         for idx, m in enumerate(m_airbounds):
             i, j, k = calc_ijk(m, nx, ny)
-            srcid: str = __generate_rain_src_id(idx)
             __write(f" ’{idx}’ {i+1} {j+1} {k+1} /")
         __write("/")
         __write("")
@@ -626,7 +653,8 @@ def generate_input(
 
         # LOADEOS
         __write("LOADEOS                                 We load the EOS file.")
-        __write("   './CO2H2O_V3.0.EOS' /")
+        eospth = Path(getcwd()).joinpath("CO2H2O_V3.0.EOS")
+        __write(f"   '{eospth}' /")
         __write("")  # \n
 
         # SAT
@@ -641,15 +669,16 @@ def generate_input(
 
         # SATTAB
         __write("SATTAB")
-        if satab is None:
-            __write("    0.0    0.0   1.0  /           krliq=sliq^3")
-            __write("    0.1    0.001 0.81 /           krgas=(1-sliq)^2")
-            __write("    0.2    0.008 0.64 /")
-            __write("    0.4    0.064 0.36 /")
-            __write("    0.6    0.216 0.16 /")
-            __write("    0.8    0.512 0.04 /")
-            __write("    0.9    0.729 0.01 /")
-            __write("    1.0    1.0   0.0  /")
+        if sattab is None:
+            __write("    0.2    0.000000   1.000000  /  The Brooks and Corey curves")
+            __write("    0.3    0.000316   0.737758 /")
+            __write("    0.4    0.005056   0.499535 /")
+            __write("    0.5    0.025600   0.302400 /")
+            __write("    0.6    0.080908   0.155832 /")
+            __write("    0.7    0.197530   0.061728 /")
+            __write("    0.8    0.409600   0.014400 /")
+            __write("    0.9    0.758834   0.000572 /")
+            __write("    1.0    1.000000   0.000000  /")
         else:
             for sl, kl, kg in zip(*sattab):
                 __write(f"    {sl}    {kl}    {kg}  /")
@@ -725,8 +754,11 @@ def generate_input(
                 ):
                     continue
                 __write(f"{k} {v}" + " " + f"ROCKNUM {rocknum}  /")
+        # __write(
+        #     f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
+        # )
         __write(
-            f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
+            f"TEMP   {params.SRC_TEMP} FLUXNUM 100 /     The temperature of the MAGMASRC"
         )
         __write("/")
         __write("")  # \n
@@ -740,10 +772,9 @@ def generate_input(
         __write(f"  COMP1T {comp1t} ’MAGMASRC’/")
         # RAINSRC
         for idx in range(len(m_airbounds)):
-            srcid: str = __generate_rain_src_id(idx)
             __write(f"  PRES 0.1 ’{idx}’ /")
-            __write(f"  TEMPC {20.0} ’{idx}’ /")  # TODO? from const or params
-            __write(f"  COMP1T {0.0} ’{idx}’ /")
+            __write(f"  TEMPC {params.TEMP_RAIN} ’{idx}’ /")
+            __write(f"  COMP1T {params.XCO2_RAIN} ’{idx}’ /")
         __write("/")
         __write("")  # \n
         __write("")  # \n
@@ -751,7 +782,7 @@ def generate_input(
         # RPTSUM
         __write("RPTSUM")
         __write(
-            "   PRES TEMPC PHST SAT#LIQ SAT#GAS /  We specify the properties saved at every report time."
+            "   PRES TEMPC PHST SAT#LIQ SAT#GAS COMP1T COMP2T/  We specify the properties saved at every report time."
         )
         __write("")  # \n
 
@@ -766,30 +797,37 @@ def generate_input(
         )
         __write("")  # \n
 
+        # Enalble WEEKTOL option
+        __write("WEEKTOL")
+        __write("")
+
         # SRCINJE
         __write("SRCINJE")
-        __write("  ’MAGMASRC’ MASS 1* 50. 1* 2000. /")
+        __write(f"  ’MAGMASRC’ MASS 1* 50. 1* {params.INJ_RATE} /")
         for idx, m in enumerate(m_airbounds):
             i, j, k = calc_ijk(m, nx, ny)
-            mass = 1.0e-3 * RAIN_AMOUNT * gx[i] * gy[j]  # t/day
+            mass = 1.0e-3 * params.RAIN_AMOUNT * gx[i] * gy[j]  # t/day
             srcid = __generate_rain_src_id(idx)
             __write(f"  ’{idx}’ MASS 1* 10. 1* {mass} /")
         __write("/")
         __write("")  # \n
 
-        # TUNING
-        __write(
-            "TUNING                        We specify that the maximal timestep is 1000 days and the initial timestep is 0.01 days."
-        )
-        __write("    1* 1000 0.01 /")
-        __write("")  # \n
-
-        # TSTEP
-        __write(
-            "TSTEP                         We advance simulation to 100000 days reporting distributions every 1000 days."
-        )
-        __write("10*10000 /")
-        __write("")  # \n
+        years_total = 0.0
+        ts_min = TSTEP_INIT
+        while years_total < TIME_SS:
+            tstep_rpt = ts_min * 100.0 * 15.0
+            ts_max = ts_min * 10.0
+            if ts_min > 50.0:
+                ts_min = 50.0
+            if ts_max > 250.0:
+                ts_max = 250.0
+            __write("TUNING")
+            __write(f"    1* {ts_max}   1* {ts_min} /")
+            __write("TIME")
+            __write(f"    {tstep_rpt} /")
+            __write("")
+            years_total += tstep_rpt / 365.0
+            ts_min *= 10.0
 
         # REPORTS
         __write("REPORTS")
@@ -820,17 +858,35 @@ def generate_input(
         )
 
 
-if __name__ == "__main__":
+def generate_from_params(params: PARAMS, pth: PathLike) -> None:
+    """Generate RUN file for single condition
+
+    Args:
+        params (PARAMS): Instance containing necessary parameters
+        pth (PathLike): Path of RUN file.
+    """
     nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
 
     cache_topo = CACHE_DIR.joinpath("topo_ls")
     topo_ls: List = None
     lat_2d, lng_2d, isrc, jsrc, ksrc = None, None, None, None, None
+
     if cache_topo.exists():
         with open(cache_topo, "rb") as pkf:
-            topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = pickle.load(pkf)
+            topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, isrc, jsrc, ksrc) = pickle.load(
+                pkf
+            )
     else:
-        topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc) = generate_topo(
+        topo_ls, (
+            xc_m,
+            yc_m,
+            zc_m,
+            lat_2d,
+            lng_2d,
+            isrc,
+            jsrc,
+            ksrc,
+        ) = generate_topo(
             DEM_PTH,
             SEADEM_PTH,
             CRS_RECT,
@@ -841,13 +897,18 @@ if __name__ == "__main__":
         )
         with open(cache_topo, "wb") as pkf:
             pickle.dump(
-                (topo_ls, (lat_2d, lng_2d, isrc, jsrc, ksrc)),
+                (topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, isrc, jsrc, ksrc)),
                 pkf,
                 pickle.HIGHEST_PROTOCOL,
             )
 
+    # add vent structure
+    with open("./analyze_magnetic_coords/elv_bounds_mufits.pkl", "rb") as pkf:
+        elv_bounds_mufits: Dict = pickle.load(pkf)
+    topo_ls = generate_simple_vent(topo_ls, xc_m, yc_m, zc_m, elv_bounds_mufits)
+
     # debug
-    plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
+    # plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
 
     actnum_ls = generate_act_ls(topo_ls)
     (
@@ -858,20 +919,22 @@ if __name__ == "__main__":
 
     # get boundary region
     m_airbounds = get_air_bounds(topo_ls, nxyz)
+
     # debug
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
 
     # relative permeability
-    satab = calc_sattab(method="None")
+    # sattab = calc_sattab(method="None")
 
     src_props = {
         "i": isrc + 1,
         "j": jsrc + 1,
         "k": ksrc + 1,
-        "pres": PRES_SRC,
-        "tempe": SRC_TEMP,
-        "comp1t": SRC_COMP1T,
+        "pres": params.PRES_SRC,
+        "tempe": params.SRC_TEMP,
+        "comp1t": params.SRC_COMP1T,
     }
+
     generate_input(
         DXYZ[0],
         DXYZ[1],
@@ -881,7 +944,12 @@ if __name__ == "__main__":
         rocknum_params,
         rocknum_pres_grad,
         m_airbounds,
-        satab,
+        None,
         src_props,
-        RUNFILE_PTH,
+        params,
+        pth,
     )
+
+
+if __name__ == "__main__":
+    pass
