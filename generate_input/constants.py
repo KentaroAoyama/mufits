@@ -155,7 +155,7 @@ DXYZ = (
 # Conctsnt parameters
 # NOTE: unit of "HCONDCF" is W/(m・K), "PERM" is mD
 POROS = 0.2
-PERM_HOST = 1.0e-16 / 9.869233e-10
+PERM_HOST = 1.0e-16 / 9.869233 * 1.0e16
 TOPO_CONST_PROPS = {
     IDX_LAND: {
         "HCONDCFX": 2.0,

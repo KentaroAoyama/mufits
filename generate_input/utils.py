@@ -175,6 +175,10 @@ def plt_result(values, coordinates, vmin, vmax, outdir):
         plt.close()
 
 
+def si2darcy(perm: float) -> float:
+    return perm / 9.869233 * 1.0e16
+
+
 if __name__ == "__main__":
     coordinates, arrays = vtu_to_numpy("./test/tmp2.0010.vtu")
     print(coordinates.shape)

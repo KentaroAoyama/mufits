@@ -374,7 +374,11 @@ def generate_act_ls(topo_ls: List[int]) -> List[int]:
 
 
 def generamte_rocknum_and_props(
-    topo_ls: List[int], top: float, nxyz: Tuple, gz: List
+    topo_ls: List[int],
+    top: float,
+    nxyz: Tuple,
+    gz: List,
+    topo_props: Dict,
 ) -> Tuple[List, Dict, Dict, Dict]:
     topo_unique = []
     for _idx in topo_ls:
@@ -386,7 +390,7 @@ def generamte_rocknum_and_props(
     for _idx in topo_ls:
         rocknum = topo_rocknum_map[_idx]
         rocknum_ls.append(rocknum)
-        rocknum_params.setdefault(rocknum, TOPO_CONST_PROPS[_idx])
+        rocknum_params.setdefault(rocknum, topo_props[_idx])
 
     rocknum_pgrad = {}
     for _idx in topo_unique:
@@ -437,10 +441,11 @@ def calc_sattab(method="corey") -> Dict:
 
 
 def get_air_bounds(topo_ls, nxyz):
+    # NOTE: Includes air over oceans, lakes
     nx, ny, _ = nxyz
     m_bounds: List = []
     for m, _idx in enumerate(topo_ls):
-        if _idx != IDX_LAND:
+        if _idx == IDX_AIR:
             continue
         i, j, k = calc_ijk(m, nx, ny)
         m_above = calc_m(i, j, k - 1, nx, ny)
@@ -816,6 +821,8 @@ def generate_input(
         ts_min = TSTEP_INIT
         while years_total < TIME_SS:
             tstep_rpt = ts_min * 100.0 * 15.0
+            if TIME_SS - years_total > tstep_rpt:
+                tstep_rpt = TIME_SS - years_total
             ts_max = ts_min * 10.0
             if ts_min > 50.0:
                 ts_min = 50.0
@@ -915,7 +922,9 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
         rocknum_ls,
         rocknum_params,
         rocknum_pres_grad,
-    ) = generamte_rocknum_and_props(topo_ls, ORIGIN[2], nxyz, DXYZ[2])
+    ) = generamte_rocknum_and_props(
+        topo_ls, ORIGIN[2], nxyz, DXYZ[2], params.TOPO_PROPS
+    )
 
     # get boundary region
     m_airbounds = get_air_bounds(topo_ls, nxyz)

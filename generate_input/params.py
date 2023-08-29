@@ -1,4 +1,5 @@
 from copy import deepcopy
+from typing import Dict
 from constants import TOPO_CONST_PROPS, IDX_VENT, IDX_AIR
 
 
@@ -38,12 +39,11 @@ class PARAMS:
 
         # Vent properties
         # 1 darcy is equivalent to 9.869233×10−13 m²
-        self.PEAM_VENT = perm_vent / 9.869233e-10  # mD
+        self.PEAM_VENT = perm_vent / 9.869233 * 1.0e16
         self.TOPO_PROPS = deepcopy(TOPO_CONST_PROPS)
-        vent_props = self.TOPO_PROPS[IDX_VENT]
-        vent_props["PERMX"] = self.PEAM_VENT
-        vent_props["PERMY"] = self.PEAM_VENT
-        vent_props["PERMZ"] = self.PEAM_VENT
+        self.TOPO_PROPS[IDX_VENT]["PERMX"] = self.PEAM_VENT
+        self.TOPO_PROPS[IDX_VENT]["PERMY"] = self.PEAM_VENT
+        self.TOPO_PROPS[IDX_VENT]["PERMZ"] = self.PEAM_VENT
         self.INJ_RATE = inj_rate
 
 
