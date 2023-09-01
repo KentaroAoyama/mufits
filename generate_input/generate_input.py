@@ -23,7 +23,6 @@ from constants import (
     DEM_PTH,
     SEADEM_PTH,
     CRS_RECT,
-    RUNFILE_PTH,
     ALIGN_CENTER,
     DXYZ,
     LAKE_BOUNDS,
@@ -42,7 +41,6 @@ from constants import (
     CACHE_DIR,
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
-    TOPO_CONST_PROPS,
     P_GROUND,
     P_GRAD_AIR,
     P_GRAD_SEA,
@@ -50,6 +48,8 @@ from constants import (
     P_GRAD_ROCK,
     TIME_SS,
     TSTEP_INIT,
+    TSTEP_MAX,
+    N_RPT,
 )
 
 from params import PARAMS
@@ -818,28 +818,40 @@ def generate_input(
         __write("")  # \n
 
         years_total = 0.0
-        ts_min = TSTEP_INIT
+        ts = TSTEP_INIT
+        # ts_min_max = params.PEAM_VENT * 0.5
+        # ts_min_max = 250.0
+        time_rpt = 0.0
         while years_total < TIME_SS:
-            tstep_rpt = ts_min * 100.0 * 15.0
-            if TIME_SS - years_total > tstep_rpt:
-                tstep_rpt = TIME_SS - years_total
-            ts_max = ts_min * 10.0
-            if ts_min > 50.0:
-                ts_min = 50.0
-            if ts_max > 250.0:
-                ts_max = 250.0
+            if ts > TSTEP_MAX:
+                ts = TSTEP_MAX
+            tstep_rpt = ts * N_RPT
+            if TIME_SS - years_total < tstep_rpt / 365.0:
+                tstep_rpt = (TIME_SS - years_total) * 365.0
+            time_rpt += tstep_rpt
             __write("TUNING")
-            __write(f"    1* {ts_max}   1* {ts_min} /")
+            __write(f"    1* {ts}   1* {ts} /")
             __write("TIME")
-            __write(f"    {tstep_rpt} /")
+            __write(f"    {time_rpt} /")
             __write("")
             years_total += tstep_rpt / 365.0
-            ts_min *= 10.0
+            ts *= 1.2
 
         # REPORTS
         __write("REPORTS")
         __write("   CONV MATBAL LINSOL  /")
         __write("")  # \n
+
+        # VARS
+        __write("VARS")
+        __write("PRES     DMAX    50   / Maximum pressure change is set to be 50 MPa")
+        __write("/")
+
+        # ILUTFILL
+        __write("ILUTFILL")
+        __write("  4  /")
+        __write(" ILUTDROP")
+        __write("  1e-4  /")
 
         # POST
         __write(

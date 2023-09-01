@@ -245,6 +245,8 @@ P_GRAD_ROCK = (DENS_ROCK * (1.0 - POROS) + DENS_WATER * POROS) * 1.0e-6
 # Time taken to reproduce steady state (in years)
 TIME_SS = 500
 # Initial time step (in days)
-TSTEP_INIT = 0.000001
+TSTEP_INIT = 0.001
+TSTEP_MAX = 10.0
+N_RPT = 365
 
 PREFIX = "tarumai"

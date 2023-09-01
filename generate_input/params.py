@@ -1,5 +1,4 @@
 from copy import deepcopy
-from typing import Dict
 from constants import TOPO_CONST_PROPS, IDX_VENT, IDX_AIR
 
 
@@ -38,6 +37,7 @@ class PARAMS:
         self.TEMP_RAIN = temp_rain
 
         # Vent properties
+        # convert SI unit to mD (mili darcy)
         # 1 darcy is equivalent to 9.869233×10−13 m²
         self.PEAM_VENT = perm_vent / 9.869233 * 1.0e16
         self.TOPO_PROPS = deepcopy(TOPO_CONST_PROPS)

@@ -5,5 +5,9 @@
 *.xyz
 *.pl
 *.RUN
+*.EOS
+*.EXE
+*.LIC
 generate_input/test/*
+generate_input/cache/*
 generate_input/tarumai/*

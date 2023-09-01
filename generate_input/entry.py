@@ -1,7 +1,6 @@
-from typing import List, Dict
+from typing import Dict
 from os import PathLike, makedirs, getcwd, cpu_count
 import subprocess
-import psutil
 from time import sleep
 from pathlib import Path
 from concurrent import futures
