@@ -162,9 +162,9 @@ TOPO_CONST_PROPS = {
         "HCONDCFY": 2.0,
         "HCONDCFZ": 2.0,
         "PORO": POROS,
-        "PERMX": PERM_HOST,
-        "PERMY": PERM_HOST,
-        "PERMZ": PERM_HOST,
+        # "PERMX": PERM_HOST,
+        # "PERMY": PERM_HOST,
+        # "PERMZ": PERM_HOST,
         "DENS": 2900.0,
         "HC": 0.84,
         "TEMPC": 20.0,
@@ -175,9 +175,9 @@ TOPO_CONST_PROPS = {
         "HCONDCFY": 2.0,
         "HCONDCFZ": 2.0,
         "PORO": POROS,
-        "PERMX": 1000,
-        "PERMY": 1000,
-        "PERMZ": 1000,
+        # "PERMX": 1000,
+        # "PERMY": 1000,
+        # "PERMZ": 1000,
         "DENS": 2900.0,
         "HC": 0.84,
         "TEMPC": 20.0,
@@ -242,11 +242,19 @@ P_GRAD_SEA = 1.02e-3
 P_GRAD_LAKE = 1.0e-3
 P_GRAD_ROCK = (DENS_ROCK * (1.0 - POROS) + DENS_WATER * POROS) * 1.0e-6
 
+# Temperature gradient (℃)
+T_GRAD_AIR = 0.0
+T_GRAD_SEA = 0.0
+T_GRAD_LAKE = 0.0
+T_GRAD_ROCK = 0.02
+
 # Time taken to reproduce steady state (in years)
 TIME_SS = 500
 # Initial time step (in days)
-TSTEP_INIT = 0.001
-TSTEP_MAX = 10.0
-N_RPT = 365
+TSTEP_INIT = 0.0005
+TSTEP_MAX = 100.0
+TSTEP_MIN_MULT = 0.001
+NDT = 1.0
+TMULT = 1.2
 
-PREFIX = "tarumai"
+OUTDIR = r"E:\tarumai"

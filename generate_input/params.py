@@ -11,7 +11,7 @@ class PARAMS:
         rain_unit: float = 1.50339178,
         xco2_rain: float = 3.8e-4,
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
-        perm_vent: float = 1.0e-12,
+        perm_vent: float = 10.0,
         inj_rate: float = 2000.0,
     ) -> None:
         """Parameters
@@ -23,7 +23,7 @@ class PARAMS:
             rain_unit (float): Amount of rain sources (mm/day).
             xco2_rain (float): CO2 mole fraction of rain.
             temp_rain (float): Temperature of rain sources (℃).
-            perm_vent (float): Permeability of vent (m^2).
+            perm_vent (float): Factor multiplied by the permeability of the host rock.
             inj_rate (float): Injection rate (t/day)
         """
         # Source properties
@@ -37,13 +37,8 @@ class PARAMS:
         self.TEMP_RAIN = temp_rain
 
         # Vent properties
-        # convert SI unit to mD (mili darcy)
-        # 1 darcy is equivalent to 9.869233×10−13 m²
-        self.PEAM_VENT = perm_vent / 9.869233 * 1.0e16
+        self.VENT_SCALE = perm_vent
         self.TOPO_PROPS = deepcopy(TOPO_CONST_PROPS)
-        self.TOPO_PROPS[IDX_VENT]["PERMX"] = self.PEAM_VENT
-        self.TOPO_PROPS[IDX_VENT]["PERMY"] = self.PEAM_VENT
-        self.TOPO_PROPS[IDX_VENT]["PERMZ"] = self.PEAM_VENT
         self.INJ_RATE = inj_rate
 
 

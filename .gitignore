@@ -8,6 +8,7 @@
 *.EOS
 *.EXE
 *.LIC
+.vscode/*
 generate_input/test/*
 generate_input/cache/*
 generate_input/tarumai/*

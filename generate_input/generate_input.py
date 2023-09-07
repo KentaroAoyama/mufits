@@ -15,7 +15,7 @@ from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from utils import calc_ijk, calc_m, plt_topo, plt_airbounds
+from utils import calc_ijk, calc_m, plt_topo, plt_airbounds, calc_k_z
 
 from constants import (
     ORIGIN,
@@ -49,7 +49,9 @@ from constants import (
     TIME_SS,
     TSTEP_INIT,
     TSTEP_MAX,
-    N_RPT,
+    NDT,
+    TMULT,
+    TSTEP_MIN_MULT,
 )
 
 from params import PARAMS
@@ -379,7 +381,9 @@ def generamte_rocknum_and_props(
     nxyz: Tuple,
     gz: List,
     topo_props: Dict,
+    vent_scale: float,
 ) -> Tuple[List, Dict, Dict, Dict]:
+    nx, ny, nz = nxyz
     topo_unique = []
     for _idx in topo_ls:
         if _idx not in topo_unique:
@@ -392,28 +396,57 @@ def generamte_rocknum_and_props(
         rocknum_ls.append(rocknum)
         rocknum_params.setdefault(rocknum, topo_props[_idx])
 
-    rocknum_pgrad = {}
+    rocknum_ptgrad = {}
     for _idx in topo_unique:
-        _prop = rocknum_pgrad.setdefault(topo_rocknum_map[_idx], {})
+        _prop = rocknum_ptgrad.setdefault(topo_rocknum_map[_idx], {})
         if _idx == IDX_AIR:
-            _prop["a"] = P_GROUND - top * P_GRAD_AIR
-            _prop["b"] = P_GRAD_AIR
+            _prop["a_p"] = P_GROUND - top * P_GRAD_AIR
+            _prop["b_p"] = P_GRAD_AIR
+            _prop["a_t"] = topo_props[IDX_AIR]["TEMPC"]
+            _prop["b_t"] = 0.0
         elif _idx == IDX_LAKE:
             elv_lake: float = None
             for m, _idx_tmp in enumerate(topo_ls):
                 if _idx_tmp == IDX_LAKE:
-                    _, _, k = calc_ijk(m, nxyz[0], nxyz[1])
+                    _, _, k = calc_ijk(m, nx, ny)
                     elv_lake = top - sum(gz[: k + 1])
                     break
-            _prop["a"] = P_GROUND - elv_lake * P_GRAD_AIR
-            _prop["b"] = P_GRAD_LAKE
+            _prop["a_p"] = P_GROUND - elv_lake * P_GRAD_AIR
+            _prop["b_p"] = P_GRAD_LAKE
+            _prop["a_t"] = topo_props[IDX_LAKE]["TEMPC"]
+            _prop["b_t"] = 0.0
         elif _idx == IDX_SEA:
-            _prop["a"] = P_GROUND
-            _prop["b"] = P_GRAD_SEA
+            _prop["a_p"] = P_GROUND
+            _prop["b_p"] = P_GRAD_SEA
+            _prop["a_t"] = topo_props[IDX_SEA]["TEMPC"]
+            _prop["b_t"] = 0.0
         else:
-            _prop["a"] = P_GROUND
-            _prop["b"] = P_GRAD_ROCK
-    return rocknum_ls, rocknum_params, rocknum_pgrad
+            _prop["a_p"] = P_GROUND
+            _prop["b_p"] = P_GRAD_ROCK
+            _prop["a_t"] = topo_props[IDX_LAND]["TEMPC"]
+            _prop["b_t"] = 0.03
+
+    # permeability
+    perm_ls = np.zeros(len(topo_ls)).tolist()
+    for j in range(ny):
+        for i in range(nx):
+            z = None
+            for k in range(nz):
+                if z is None:
+                    z = gz[k] * 0.5
+                else:
+                    z += gz[k] * 0.5
+                m = calc_m(i, j, k, nx, ny)
+                _idx = topo_ls[m]
+                if _idx == IDX_VENT:
+                    perm_ls[m] = vent_scale * calc_k_z(z)
+                elif _idx == IDX_LAND:
+                    perm_ls[m] = calc_k_z(z)
+                else:
+                    perm_ls[m] = topo_props[_idx]["PERMX"]
+                    continue
+                z += gz[k] * 0.5
+    return rocknum_ls, perm_ls, rocknum_params, rocknum_ptgrad
 
 
 def calc_sattab(method="corey") -> Dict:
@@ -467,7 +500,8 @@ def generate_input(
     gy: List,
     gz: List,
     act_ls: List,
-    rocknum_ls,
+    rocknum_ls: List,
+    perm_ls: List,
     rocknum_params: Dict,
     rocknum_pres_grad: Dict,
     m_airbounds: List[int],
@@ -599,6 +633,33 @@ def generate_input(
         )
         __write("")  # \n
 
+        # PERMX
+        __write("PERMX")
+        _str: str = ""
+        for _p in perm_ls:
+            _str += str(_p) + "  "
+        _str += "  /"
+        __write(_str)
+        __write("")  # \n
+
+        # PERMY
+        __write("PERMY")
+        _str: str = ""
+        for _p in perm_ls:
+            _str += str(_p) + "  "
+        _str += "  /"
+        __write(_str)
+        __write("")  # \n
+
+        # PERMZ
+        __write("PERMZ")
+        _str: str = ""
+        for _p in perm_ls:
+            _str += str(_p) + "  "
+        _str += "  /"
+        __write(_str)
+        __write("")  # \n
+
         # EQUALREG
         __write(
             "EQUALREG                              We specify uniform distributions:"
@@ -606,7 +667,7 @@ def generate_input(
         for rocknum, props in rocknum_params.items():
             for k, v in props.items():
                 # DENS and HC should be written in ROCKDH section
-                if k in ("DENS", "HC", "TEMPC", "COMP1T"):
+                if k in ("DENS", "HC", "TEMPC", "COMP1T", "PERMX", "PERMY", "PERMZ"):
                     continue
                 __write(f"{k} {v}" + " " + f"ROCKNUM {rocknum}  /")
         __write("/")
@@ -731,14 +792,6 @@ def generate_input(
         __write("ECHO      Enables more information output in the LOG-file")
         __write("")  # \n
 
-        # OPERAREG (set initial value)
-        __write("OPERAREG")
-        for rocknum, prop in rocknum_pres_grad.items():
-            a, b = prop["a"], prop["b"]
-            __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {a}  {b}  /")
-        __write("/")
-        __write("")  # \n
-
         # EQUALREG
         __write(
             "EQUALREG                              We specify uniform distributions:"
@@ -765,6 +818,16 @@ def generate_input(
         __write(
             f"TEMP   {params.SRC_TEMP} FLUXNUM 100 /     The temperature of the MAGMASRC"
         )
+        __write("/")
+        __write("")  # \n
+
+        # OPERAREG (set initial value)
+        __write("OPERAREG")
+        for rocknum, prop in rocknum_pres_grad.items():
+            ap, bp = prop["a_p"], prop["b_p"]
+            __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {ap}  {bp}  /")
+            at, bt = prop["a_t"], prop["b_t"]
+            __write(f"   TEMPC DEPTH  ROCKNUM  {rocknum} MULTA  {at}  {bt}  /")
         __write("/")
         __write("")  # \n
 
@@ -817,6 +880,7 @@ def generate_input(
         __write("/")
         __write("")  # \n
 
+        # TUNING
         years_total = 0.0
         ts = TSTEP_INIT
         # ts_min_max = params.PEAM_VENT * 0.5
@@ -825,17 +889,29 @@ def generate_input(
         while years_total < TIME_SS:
             if ts > TSTEP_MAX:
                 ts = TSTEP_MAX
-            tstep_rpt = ts * N_RPT
+            tstep_rpt = ts * NDT
             if TIME_SS - years_total < tstep_rpt / 365.0:
                 tstep_rpt = (TIME_SS - years_total) * 365.0
+            elif ts == TSTEP_MAX:
+                tstep_rpt = ts * 100.0
             time_rpt += tstep_rpt
+            tsmax, tsmin = ts, ts * TSTEP_MIN_MULT
+            # if ts > 1.0:
+            #     tsmax = ts
+            #     tsmin = 0.01
+            # else:
+            #     tsmax = ts
+            #     tsmin = ts
             __write("TUNING")
-            __write(f"    1* {ts}   1* {ts} /")
+            __write(f"    1* {tsmax}   1* {tsmin} /")
             __write("TIME")
             __write(f"    {time_rpt} /")
             __write("")
             years_total += tstep_rpt / 365.0
-            ts *= 1.2
+            if ts > 1.0:
+                ts *= 1.01
+            else:
+                ts *= TMULT
 
         # REPORTS
         __write("REPORTS")
@@ -846,12 +922,15 @@ def generate_input(
         __write("VARS")
         __write("PRES     DMAX    50   / Maximum pressure change is set to be 50 MPa")
         __write("/")
+        __write("")
 
         # ILUTFILL
         __write("ILUTFILL")
         __write("  4  /")
+        __write("")
         __write(" ILUTDROP")
         __write("  1e-4  /")
+        __write("")
 
         # POST
         __write(
@@ -932,16 +1011,23 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
     actnum_ls = generate_act_ls(topo_ls)
     (
         rocknum_ls,
+        perm_ls,
         rocknum_params,
         rocknum_pres_grad,
     ) = generamte_rocknum_and_props(
-        topo_ls, ORIGIN[2], nxyz, DXYZ[2], params.TOPO_PROPS
+        topo_ls,
+        ORIGIN[2],
+        nxyz,
+        DXYZ[2],
+        params.TOPO_PROPS,
+        params.VENT_SCALE,
     )
 
     # get boundary region
     m_airbounds = get_air_bounds(topo_ls, nxyz)
 
     # debug
+    # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
 
     # relative permeability
@@ -962,6 +1048,7 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
         DXYZ[2],
         actnum_ls,
         rocknum_ls,
+        perm_ls,
         rocknum_params,
         rocknum_pres_grad,
         m_airbounds,

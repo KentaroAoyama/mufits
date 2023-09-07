@@ -1,6 +1,7 @@
 from typing import List, Tuple
 from pathlib import Path
 from os import PathLike, makedirs
+from math import log10
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -18,6 +19,21 @@ def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
 
 def calc_m(i, j, k, nx, ny):
     return nx * ny * k + nx * j + i
+
+
+def calc_k_z(z: float) -> float:
+    """Permeability with depth dependence
+
+    Reference:
+        https://doi.org/10.1029/1998RG900002
+
+    Args:
+        z (float): Depth from earth surface (m)
+
+    Returns:
+        float: Permeability (mD)
+    """
+    return 10.0 ** (-14.0 - 3.2 * log10(z / 1000.0)) / 9.869233 * 1.0e16
 
 
 def plt_topo(

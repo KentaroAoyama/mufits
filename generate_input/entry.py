@@ -8,9 +8,10 @@ from concurrent import futures
 import yaml
 from generate_input import generate_from_params
 from params import PARAMS
-from constants import PREFIX
+from constants import OUTDIR
 
-base_dir = Path(getcwd()).joinpath(PREFIX)
+cur_dir = Path(getcwd())
+base_dir = Path(OUTDIR)
 
 
 def condition_to_dir(
@@ -35,7 +36,7 @@ def run_single_condition(
     runpth = sim_dir.joinpath("tmp.RUN")
     generate_from_params(params, runpth)
 
-    exepth = base_dir.joinpath("H64.EXE")
+    exepth = cur_dir.joinpath("H64.EXE")
     logpth = sim_dir.joinpath("log.txt")
     print(f"RUN: {runpth}")
     with open(logpth, "w") as outfile:
@@ -64,31 +65,6 @@ def main():
                         inj_rate=inj_rate,
                         perm_vent=perm,
                     )
-                    # while True:
-                    # if (
-                    #     psutil.virtual_memory().percent < 60.0
-                    #     and psutil.cpu_percent(interval=1) < 60.0
-                    # ):
-                    #     pool.submit(
-                    #         run_single_condition,
-                    #         temp=temp,
-                    #         comp1t=comp1t,
-                    #         inj_rate=inj_rate,
-                    #         pearm_vent=perm,
-                    #     )
-                    # run_single_condition(
-                    #     temp=temp,
-                    #     comp1t=comp1t,
-                    #     inj_rate=inj_rate,
-                    #     perm_vent=perm,
-                    # )
-                    #     break
-                    # else:
-                    #     print(
-                    #         psutil.virtual_memory().percent,
-                    #         psutil.cpu_percent(interval=1),
-                    #     )
-                    #     sleep(5)
 
     pool.shutdown(wait=True)
 
