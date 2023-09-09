@@ -17,7 +17,7 @@ def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
     return i, j, k
 
 
-def calc_m(i, j, k, nx, ny):
+def calc_m(i: int, j: int, k: int, nx: int, ny: int) -> int:
     return nx * ny * k + nx * j + i
 
 
@@ -113,7 +113,7 @@ def vtu_to_numpy(vtu_file_path):
     return coordinates, arrays
 
 
-def plt_result(values, coordinates, vmin, vmax, outdir):
+def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
     x0 = 0.0
     x_ls = []
     for dx in DXYZ[0]:
@@ -150,6 +150,8 @@ def plt_result(values, coordinates, vmin, vmax, outdir):
         fig, ax = plt.subplots()
         mappable = ax.pcolormesh(xx, yy, vv, cmap=plt.cm.jet, vmin=vmin, vmax=vmax)
         fig.colorbar(mappable)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
         fig.savefig(zdir.joinpath(f"{str(z)}.png"), dpi=200, bbox_inches="tight")
         plt.clf()
         plt.close()
@@ -168,6 +170,8 @@ def plt_result(values, coordinates, vmin, vmax, outdir):
         fig, ax = plt.subplots()
         mappable = ax.pcolormesh(yy, zz, vv, cmap=plt.cm.jet, vmin=vmin, vmax=vmax)
         fig.colorbar(mappable)
+        ax.set_xlim(*ylim)
+        ax.set_ylim(*zlim)
         fig.savefig(xdir.joinpath(f"{str(x)}.png"), dpi=200, bbox_inches="tight")
         plt.clf()
         plt.close()
@@ -186,6 +190,8 @@ def plt_result(values, coordinates, vmin, vmax, outdir):
         fig, ax = plt.subplots()
         mappable = ax.pcolormesh(xx, zz, vv, cmap=plt.cm.jet, vmin=vmin, vmax=vmax)
         fig.colorbar(mappable)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*zlim)
         fig.savefig(ydir.joinpath(f"{str(y)}.png"), dpi=200, bbox_inches="tight")
         plt.clf()
         plt.close()
@@ -196,18 +202,17 @@ def si2darcy(perm: float) -> float:
 
 
 if __name__ == "__main__":
-    coordinates, arrays = vtu_to_numpy("./test/tmp2.0010.vtu")
-    print(coordinates.shape)
-    result_dir = Path("./result/10_modified2")
-    print(arrays.keys())
+    path = Path(r"E:\tarumai\200.0_0.0_500.0_10.0").joinpath("tmp.0046.vtu")
+    coordinates, arrays = vtu_to_numpy(str(path))
+    result_dir = Path("./result/gradual_perm46")
     for key, val in arrays.items():
         if key == "PHST":
-            continue
-        #!
-        if key != "TEMPC (C)":
             continue
         print("===")
         print(key)
         outdir = result_dir.joinpath(key)
         vlim = PARAMS_VTK.VLIM[key]
-        plt_result(val, coordinates, vlim[0], vlim[1], outdir)
+        xlim = PARAMS_VTK.XLIM
+        ylim = PARAMS_VTK.YLIM
+        zlim = PARAMS_VTK.ZLIM
+        plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)

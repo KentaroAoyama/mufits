@@ -188,9 +188,9 @@ TOPO_CONST_PROPS = {
         "HCONDCFY": 0.6,
         "HCONDCFZ": 0.6,
         "PORO": 0.9,
-        "PERMX": 0.1,
-        "PERMY": 0.1,
-        "PERMZ": 0.1,
+        "PERMX": 0.0,
+        "PERMY": 0.0,
+        "PERMZ": 0.0,
         "DENS": 1020.0,
         "HC": 3.9,
         "TEMPC": 20.0,
@@ -214,9 +214,9 @@ TOPO_CONST_PROPS = {
         "HCONDCFY": 0.6,
         "HCONDCFZ": 0.6,
         "PORO": 0.9,
-        "PERMX": 0.1,
-        "PERMY": 0.1,
-        "PERMZ": 0.1,
+        "PERMX": 0.0,
+        "PERMY": 0.0,
+        "PERMZ": 0.0,
         "DENS": 1000.0,
         "HC": 4.182,
         "TEMPC": 10.0,
@@ -242,18 +242,19 @@ P_GRAD_SEA = 1.02e-3
 P_GRAD_LAKE = 1.0e-3
 P_GRAD_ROCK = (DENS_ROCK * (1.0 - POROS) + DENS_WATER * POROS) * 1.0e-6
 
-# Temperature gradient (℃)
+# Temperature gradient (℃/m)
 T_GRAD_AIR = 0.0
 T_GRAD_SEA = 0.0
 T_GRAD_LAKE = 0.0
-T_GRAD_ROCK = 0.02
+T_GRAD_ROCK = 0.03
 
 # Time taken to reproduce steady state (in years)
-TIME_SS = 500
+TIME_SS = 50
 # Initial time step (in days)
-TSTEP_INIT = 0.0005
+TSTEP_INIT = 0.00001
+# Maximum time step (days)
 TSTEP_MAX = 100.0
-TSTEP_MIN_MULT = 0.001
+# number of iterations for each TSTEP_MAX
 NDT = 1.0
 TMULT = 1.2
 

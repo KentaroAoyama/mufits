@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
-
+# TODO: more precise initial parameter settings (T, P, X)
 """Generate input file for MUFITS (Afanasyev, 2012)
 """
 
@@ -41,17 +41,18 @@ from constants import (
     CACHE_DIR,
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
+    TOPO_CONST_PROPS,
     P_GROUND,
     P_GRAD_AIR,
     P_GRAD_SEA,
     P_GRAD_LAKE,
     P_GRAD_ROCK,
+    T_GRAD_ROCK,
     TIME_SS,
     TSTEP_INIT,
     TSTEP_MAX,
     NDT,
     TMULT,
-    TSTEP_MIN_MULT,
 )
 
 from params import PARAMS
@@ -382,7 +383,8 @@ def generamte_rocknum_and_props(
     gz: List,
     topo_props: Dict,
     vent_scale: float,
-) -> Tuple[List, Dict, Dict, Dict]:
+) -> Tuple[List, Dict, Dict, Dict, Dict]:
+    # TODO: lateral boundary locations and props (i, j, k): prop
     nx, ny, nz = nxyz
     topo_unique = []
     for _idx in topo_ls:
@@ -430,23 +432,44 @@ def generamte_rocknum_and_props(
     perm_ls = np.zeros(len(topo_ls)).tolist()
     for j in range(ny):
         for i in range(nx):
-            z = None
+            z = 0.1
             for k in range(nz):
-                if z is None:
-                    z = gz[k] * 0.5
-                else:
-                    z += gz[k] * 0.5
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
+                # depth from earth surface (m)
+                if _idx not in (IDX_LAND, IDX_VENT):
+                    perm_ls[m] = topo_props[_idx]["PERMX"]
+                    continue
+                z += gz[k] * 0.5
                 if _idx == IDX_VENT:
                     perm_ls[m] = vent_scale * calc_k_z(z)
                 elif _idx == IDX_LAND:
                     perm_ls[m] = calc_k_z(z)
-                else:
-                    perm_ls[m] = topo_props[_idx]["PERMX"]
+                z += gz[k] * 0.5
+
+    # lateral boundary
+    lateral_props: Dict = {}
+    fluxnum = 100
+    for j in range(ny):
+        for i in range(nx):
+            if i not in (0, nx) and j not in (0, ny):
+                continue
+            # depth from earth surface (m)
+            z = 0.0
+            for k in range(nz):
+                m = calc_m(i, j, k, nx, ny)
+                _idx = topo_ls[m]
+                if _idx not in (IDX_LAND, IDX_VENT):
                     continue
                 z += gz[k] * 0.5
-    return rocknum_ls, perm_ls, rocknum_params, rocknum_ptgrad
+                prop: Dict = lateral_props.setdefault((i + 1, j + 1, k + 1), {})
+                prop["FLUXNUM"] = fluxnum  # NOTE:
+                prop["TEMPC"] = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"] + T_GRAD_ROCK * z
+                prop["PRES"] = P_GROUND + P_GRAD_ROCK * z
+                prop["COMP1T"] = TOPO_CONST_PROPS[IDX_LAND]["COMP1T"]
+                z += gz[k] * 0.5
+                fluxnum += 1
+    return rocknum_ls, perm_ls, rocknum_params, rocknum_ptgrad, lateral_props
 
 
 def calc_sattab(method="corey") -> Dict:
@@ -503,6 +526,7 @@ def generate_input(
     rocknum_ls: List,
     perm_ls: List,
     rocknum_params: Dict,
+    lateral_bounds: Dict,
     rocknum_pres_grad: Dict,
     m_airbounds: List[int],
     sattab: Tuple,
@@ -510,6 +534,7 @@ def generate_input(
     params: PARAMS,
     fpth: PathLike,
 ):
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
     with open(fpth, "w", encoding="utf-8") as _f:
         __write: Callable = partial(write, _f)
 
@@ -532,6 +557,10 @@ def generate_input(
         # HCROCK
         __write("HCROCK                                  We enable heat conduction.")
         __write("")  # \n
+
+        # # NOCASC TODO:
+        # __write("NOCASC                                  We disable cascade method.")
+        # __write("")
 
         # GRID
         __write(
@@ -597,7 +626,10 @@ def generate_input(
         __write(_str)
         __write("")  # \n
 
-        # BOUNDARY
+        # BOUNDARY (fluxnum1 imin1 imax1 jmin1 jmax1 kmin1 kmax1 d1_1 d2_1 d3_1 d4_1 d5_1 d6_1
+        # type_1 mode_1 nu1_1 nu2_1 nu3_1 typenum1 actnum1)
+        # ※ typenum:  Cell type ID. Available values for grid blocks: 1 (default)- an ordinary block, 2 - an impermeable grid block in which only heat conduction equation is solved)
+        # ※ actnum:  Activity flag. 0: cell is inactive (impermeable), 1 (default): cell is active, 2: cell is active but its parameters are fixed
         __write("BOUNDARY                               We define the boundaries:")
         srci, srcj, srck = src_props["i"], src_props["j"], src_props["k"]
         # __write(f"   2   6* 'I-'  'I+'  'J-'  'J+'  2* INFTHIN /    <- Aquifer")
@@ -612,6 +644,29 @@ def generate_input(
             f"   100   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
         )
 
+        # lateral boundary block locations
+        for (i, j, k), prop in lateral_bounds.items():
+            Ip, Im, Jp, Jm = None, None, None, None
+            if i == 1:
+                Ip = "'" + "I+" + "'"
+            if i == nx:
+                Im = "'" + "I-" + "'"
+            if j == 1:
+                Jp = "'" + "J+" + "'"
+            if j == ny:
+                Jm = "'" + "J-" + "'"
+            dsum = ""
+            cou_none = 2
+            for _d in (Ip, Im, Jp, Jm):
+                if _d is None:
+                    cou_none += 1
+                else:
+                    dsum += _d + " "
+            fluxnum = prop["FLUXNUM"]
+            __write(
+                f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 2  1 /    <- Lateral boundary"
+            )
+
         __write("/")
         __write("")
 
@@ -620,7 +675,6 @@ def generate_input(
         # MAGMASRC
         __write(f" ’MAGMASRC’ {srci} {srcj} {srck} /")
         # RAINSRC
-        nx, ny = len(DXYZ[0]), len(DXYZ[1])
         for idx, m in enumerate(m_airbounds):
             i, j, k = calc_ijk(m, nx, ny)
             __write(f" ’{idx}’ {i+1} {j+1} {k+1} /")
@@ -783,9 +837,7 @@ def generate_input(
         __write("")  # \n
 
         # REGALL
-        __write(
-            "REGALL      We enable application of the following two keywords both to domain grid blocks and boundary grid blocks."
-        )
+        __write("REGALL")
         __write("")  # \n
 
         # ECHO
@@ -816,8 +868,17 @@ def generate_input(
         #     f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
         # )
         __write(
-            f"TEMP   {params.SRC_TEMP} FLUXNUM 100 /     The temperature of the MAGMASRC"
+            f"TEMPC   {params.SRC_TEMP} FLUXNUM 1000 /     The temperature of the MAGMASRC"
         )
+        for _, prop in lateral_bounds.items():
+            FLUXNUM = prop["FLUXNUM"]
+            T = prop["TEMPC"]
+            P = prop["PRES"]
+            COMP1T = prop["COMP1T"]
+            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /")
+            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+
         __write("/")
         __write("")  # \n
 
@@ -895,7 +956,7 @@ def generate_input(
             elif ts == TSTEP_MAX:
                 tstep_rpt = ts * 100.0
             time_rpt += tstep_rpt
-            tsmax, tsmin = ts, ts * TSTEP_MIN_MULT
+            tsmax, tsmin = ts, TSTEP_INIT
             # if ts > 1.0:
             #     tsmax = ts
             #     tsmin = 0.01
@@ -908,10 +969,11 @@ def generate_input(
             __write(f"    {time_rpt} /")
             __write("")
             years_total += tstep_rpt / 365.0
-            if ts > 1.0:
-                ts *= 1.01
-            else:
-                ts *= TMULT
+            # if ts > 1.0:
+            #     ts *= 1.01
+            # else:
+            #     ts *= TMULT
+            ts *= TMULT
 
         # REPORTS
         __write("REPORTS")
@@ -920,7 +982,7 @@ def generate_input(
 
         # VARS
         __write("VARS")
-        __write("PRES     DMAX    50   / Maximum pressure change is set to be 50 MPa")
+        __write("PRES     DMAX    1   / Maximum pressure change is set to be 1 MPa")
         __write("/")
         __write("")
 
@@ -1014,6 +1076,7 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
         perm_ls,
         rocknum_params,
         rocknum_pres_grad,
+        lateral_bounds,
     ) = generamte_rocknum_and_props(
         topo_ls,
         ORIGIN[2],
@@ -1050,6 +1113,7 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
         rocknum_ls,
         perm_ls,
         rocknum_params,
+        lateral_bounds,
         rocknum_pres_grad,
         m_airbounds,
         None,

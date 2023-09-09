@@ -1,7 +1,6 @@
 from typing import Dict
 from os import PathLike, makedirs, getcwd, cpu_count
 import subprocess
-from time import sleep
 from pathlib import Path
 from concurrent import futures
 
@@ -47,24 +46,24 @@ def run_single_condition(
 def main():
     with open(Path("./conditions.yml"), "r") as ymf:
         conditions: Dict = yaml.safe_load(ymf)
-    pool = futures.ProcessPoolExecutor(max_workers=cpu_count() - 2)
+    pool = futures.ProcessPoolExecutor(max_workers=cpu_count() - 5)
     for perm in conditions["pearm"]:
         for temp in conditions["tempe"]:
             for comp1t in conditions["comp1t"]:
                 for inj_rate in conditions["inj_rate"]:
-                    # run_single_condition(
+                    run_single_condition(
+                        temp=temp,
+                        comp1t=comp1t,
+                        inj_rate=inj_rate,
+                        perm_vent=perm,
+                    )  #!
+                    # pool.submit(
+                    #     run_single_condition,
                     #     temp=temp,
                     #     comp1t=comp1t,
                     #     inj_rate=inj_rate,
                     #     perm_vent=perm,
                     # )
-                    pool.submit(
-                        run_single_condition,
-                        temp=temp,
-                        comp1t=comp1t,
-                        inj_rate=inj_rate,
-                        perm_vent=perm,
-                    )
 
     pool.shutdown(wait=True)
 
