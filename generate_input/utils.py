@@ -56,6 +56,36 @@ def plt_topo(
         plt.clf()
         plt.close()
 
+def plt_any_val(val_ls: List, x_ls: List, y_ls: List, nxyz: Tuple[int], savedir: PathLike, label_name: str, ax="Y") -> None:
+    nx, ny, nz = nxyz
+    ax = ax.lower()
+    dirpth = Path(savedir)
+    val_3d = np.zeros(shape=(nz, ny, nx))
+    for m, idx in enumerate(val_ls):
+        i, j, k = calc_ijk(m, nx, ny)
+        val_3d[k][j][i] = idx
+    # transpose
+    if ax == "x":
+        val_3d = np.transpose(val_3d, (2, 0, 1))
+    if ax == "y":
+        val_3d = np.transpose(val_3d, (1, 0, 2))
+        # val_3d = np.flip(val_3d, axis=1)
+
+    grid_x, grid_y = np.meshgrid(
+        np.array(x_ls), np.array(y_ls),
+    )
+    makedirs(dirpth, exist_ok=True)
+    for i, val2d in enumerate(val_3d):
+        fpth = dirpth.joinpath(f"{i}.png")
+        fig, ax = plt.subplots()
+        mappable = ax.pcolormesh(grid_x, grid_y, val2d)
+        pp = fig.colorbar(mappable, ax=ax, orientation="vertical")
+        pp.set_label(label_name)
+        ax.set_aspect("equal")
+        fig.savefig(fpth, dpi=200, bbox_inches="tight")
+        plt.clf()
+        plt.close()
+
 
 def plt_airbounds(
     topo_ls: List,
@@ -197,16 +227,18 @@ def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
         plt.close()
 
 
-def si2darcy(perm: float) -> float:
+def si2mdarcy(perm: float) -> float:
     return perm / 9.869233 * 1.0e16
 
+def mdarcy2si(perm: float) -> float:
+    return perm * 9.869233 * 1.0e-16
 
 if __name__ == "__main__":
-    path = Path(r"E:\tarumai\200.0_0.0_500.0_10.0").joinpath("tmp.0046.vtu")
+    path = Path(r"E:\tarumai\200.0_0.0_500.0_10.0").joinpath("tmp.0091.vtu")
     coordinates, arrays = vtu_to_numpy(str(path))
-    result_dir = Path("./result/gradual_perm46")
+    result_dir = Path("./result/200.0_0.0_500.0_10.0")
     for key, val in arrays.items():
-        if key == "PHST":
+        if key in ("PHST", "SAT#GAS", "COMP2T"):
             continue
         print("===")
         print(key)

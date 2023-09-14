@@ -253,9 +253,9 @@ TIME_SS = 50
 # Initial time step (in days)
 TSTEP_INIT = 0.00001
 # Maximum time step (days)
-TSTEP_MAX = 100.0
+TSTEP_MAX = 300.0
 # number of iterations for each TSTEP_MAX
-NDT = 1.0
-TMULT = 1.2
+NDT = 1
+TMULT = 1.05
 
 OUTDIR = r"E:\tarumai"

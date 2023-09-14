@@ -15,7 +15,7 @@ from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from utils import calc_ijk, calc_m, plt_topo, plt_airbounds, calc_k_z
+from utils import calc_ijk, calc_m, mdarcy2si, plt_topo, plt_airbounds, calc_k_z, plt_any_val
 
 from constants import (
     ORIGIN,
@@ -449,7 +449,7 @@ def generamte_rocknum_and_props(
 
     # lateral boundary
     lateral_props: Dict = {}
-    fluxnum = 100
+    fluxnum = 101
     for j in range(ny):
         for i in range(nx):
             if i not in (0, nx) and j not in (0, ny):
@@ -648,13 +648,13 @@ def generate_input(
         for (i, j, k), prop in lateral_bounds.items():
             Ip, Im, Jp, Jm = None, None, None, None
             if i == 1:
-                Ip = "'" + "I+" + "'"
+                Ip = "'" + "I-" + "'"
             if i == nx:
-                Im = "'" + "I-" + "'"
+                Im = "'" + "I+" + "'"
             if j == 1:
-                Jp = "'" + "J+" + "'"
+                Jp = "'" + "J-" + "'"
             if j == ny:
-                Jm = "'" + "J-" + "'"
+                Jm = "'" + "J+" + "'"
             dsum = ""
             cou_none = 2
             for _d in (Ip, Im, Jp, Jm):
@@ -664,7 +664,7 @@ def generate_input(
                     dsum += _d + " "
             fluxnum = prop["FLUXNUM"]
             __write(
-                f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 2  1 /    <- Lateral boundary"
+                f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 1  2 /    <- Lateral boundary"
             )
 
         __write("/")
@@ -868,8 +868,9 @@ def generate_input(
         #     f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
         # )
         __write(
-            f"TEMPC   {params.SRC_TEMP} FLUXNUM 1000 /     The temperature of the MAGMASRC"
+            f"TEMPC   {params.SRC_TEMP} FLUXNUM 100 /     The temperature of the MAGMASRC"
         )
+        # lateral boundary conditions
         for _, prop in lateral_bounds.items():
             FLUXNUM = prop["FLUXNUM"]
             T = prop["TEMPC"]
@@ -951,8 +952,8 @@ def generate_input(
             if ts > TSTEP_MAX:
                 ts = TSTEP_MAX
             tstep_rpt = ts * NDT
-            if TIME_SS - years_total < tstep_rpt / 365.0:
-                tstep_rpt = (TIME_SS - years_total) * 365.0
+            if TIME_SS - years_total < tstep_rpt / 365.25:
+                tstep_rpt = (TIME_SS - years_total) * 365.25
             elif ts == TSTEP_MAX:
                 tstep_rpt = ts * 100.0
             time_rpt += tstep_rpt
@@ -968,7 +969,7 @@ def generate_input(
             __write("TIME")
             __write(f"    {time_rpt} /")
             __write("")
-            years_total += tstep_rpt / 365.0
+            years_total += tstep_rpt / 365.25
             # if ts > 1.0:
             #     ts *= 1.01
             # else:
@@ -1092,7 +1093,9 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
     # debug
     # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
-
+    perm_si_ls = [mdarcy2si(i) for i in perm_ls]
+    perm_with_nan = np.where(np.array(perm_si_ls) == 0, np.nan, np.array(perm_si_ls))
+    plt_any_val(np.log10(perm_with_nan), __stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in __stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
     # relative permeability
     # sattab = calc_sattab(method="None")
 
