@@ -9,6 +9,7 @@ from typing import List, Tuple, Dict, TextIO, Callable
 from pathlib import Path
 from os import PathLike, makedirs, getcwd
 import pickle
+from math import exp, log10
 
 import pandas as pd
 from pyproj import Transformer
@@ -513,6 +514,10 @@ def get_air_bounds(topo_ls, nxyz):
     return m_bounds
 
 
+def calc_tstep(perm: float, q: float, A: float=0.0006743836062232225, B: float=0.4737982349312893) -> float:
+    _max = 300.0 * (exp(-B * (log10(perm) - 1.0)))
+    return _max * exp(-A * q)
+
 def write(_f: TextIO, _string: str):
     _string += "\n"
     _f.write(_string)
@@ -945,35 +950,25 @@ def generate_input(
         # TUNING
         years_total = 0.0
         ts = TSTEP_INIT
-        # ts_min_max = params.PEAM_VENT * 0.5
-        # ts_min_max = 250.0
+        ts_max = calc_tstep(params.VENT_SCALE, params.INJ_RATE)
+        print(ts_max)
         time_rpt = 0.0
         while years_total < TIME_SS:
-            if ts > TSTEP_MAX:
-                ts = TSTEP_MAX
+            if ts > ts_max:
+                ts = ts_max
             tstep_rpt = ts * NDT
             if TIME_SS - years_total < tstep_rpt / 365.25:
                 tstep_rpt = (TIME_SS - years_total) * 365.25
-            elif ts == TSTEP_MAX:
+            elif ts == ts_max:
                 tstep_rpt = ts * 100.0
             time_rpt += tstep_rpt
             tsmax, tsmin = ts, TSTEP_INIT
-            # if ts > 1.0:
-            #     tsmax = ts
-            #     tsmin = 0.01
-            # else:
-            #     tsmax = ts
-            #     tsmin = ts
             __write("TUNING")
             __write(f"    1* {tsmax}   1* {tsmin} /")
             __write("TIME")
             __write(f"    {time_rpt} /")
             __write("")
             years_total += tstep_rpt / 365.25
-            # if ts > 1.0:
-            #     ts *= 1.01
-            # else:
-            #     ts *= TMULT
             ts *= TMULT
 
         # REPORTS
@@ -1093,9 +1088,9 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
     # debug
     # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
-    perm_si_ls = [mdarcy2si(i) for i in perm_ls]
-    perm_with_nan = np.where(np.array(perm_si_ls) == 0, np.nan, np.array(perm_si_ls))
-    plt_any_val(np.log10(perm_with_nan), __stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in __stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
+    # perm_si_ls = [mdarcy2si(i) for i in perm_ls]
+    # perm_with_nan = np.where(np.array(perm_si_ls) == 0, np.nan, np.array(perm_si_ls))
+    # plt_any_val(np.log10(perm_with_nan), __stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in __stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
     # relative permeability
     # sattab = calc_sattab(method="None")
 

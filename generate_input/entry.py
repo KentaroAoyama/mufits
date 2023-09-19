@@ -51,19 +51,19 @@ def main():
         for temp in conditions["tempe"]:
             for comp1t in conditions["comp1t"]:
                 for inj_rate in conditions["inj_rate"]:
-                    run_single_condition(
-                        temp=temp,
-                        comp1t=comp1t,
-                        inj_rate=inj_rate,
-                        perm_vent=perm,
-                    )  #!
-                    # pool.submit(
-                    #     run_single_condition,
+                    # run_single_condition(
                     #     temp=temp,
                     #     comp1t=comp1t,
                     #     inj_rate=inj_rate,
                     #     perm_vent=perm,
-                    # )
+                    # )  #!
+                    pool.submit(
+                        run_single_condition,
+                        temp=temp,
+                        comp1t=comp1t,
+                        inj_rate=inj_rate,
+                        perm_vent=perm,
+                    )
 
     pool.shutdown(wait=True)
 
