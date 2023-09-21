@@ -249,13 +249,14 @@ T_GRAD_LAKE = 0.0
 T_GRAD_ROCK = 0.03
 
 # Time taken to reproduce steady state (in years)
-TIME_SS = 20 #!
+TIME_SS = 500
 # Initial time step (in days)
 TSTEP_INIT = 0.00001
 # Maximum time step (days)
 TSTEP_MAX = 300.0
 # number of iterations for each TSTEP_MAX
-NDT = 1
-TMULT = 1.01
+NDTMIN = 5
+NDTMAX = 100
+TMULT = 1.05
 
 OUTDIR = r"E:\tarumai"

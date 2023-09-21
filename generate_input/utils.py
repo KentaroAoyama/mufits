@@ -234,19 +234,19 @@ def mdarcy2si(perm: float) -> float:
     return perm * 9.869233 * 1.0e-16
 
 if __name__ == "__main__":
-    print(calc_ijk(14569  - 1, 40, 40))
-    # path = Path(r"E:\tarumai\200.0_0.0_500.0_10.0").joinpath("tmp.0354.vtu")
-    # coordinates, arrays = vtu_to_numpy(str(path))
-    # result_dir = Path("./result/200.0_0.0_500.0_10.0")
-    # for key, val in arrays.items():
-    #     if key in ("PHST", "SAT#GAS", "COMP2T"):
-    #         continue
-    #     print("===")
-    #     print(key)
-    #     outdir = result_dir.joinpath(key)
-    #     vlim = PARAMS_VTK.VLIM[key]
-    #     xlim = PARAMS_VTK.XLIM
-    #     ylim = PARAMS_VTK.YLIM
-    #     zlim = PARAMS_VTK.ZLIM
-    #     plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
+    # print(calc_ijk(14569  - 1, 40, 40))
+    path = Path(r"E:\tarumai\200.0_0.0_1000.0_10.0").joinpath("tmp.0358.vtu")
+    coordinates, arrays = vtu_to_numpy(str(path))
+    result_dir = Path("./result/200.0_0.0_1000.0_10.0")
+    for key, val in arrays.items():
+        if key in ("PHST", "SAT#GAS", "COMP2T"):
+            continue
+        print("===")
+        print(key)
+        outdir = result_dir.joinpath(key)
+        vlim = PARAMS_VTK.VLIM[key]
+        xlim = PARAMS_VTK.XLIM
+        ylim = PARAMS_VTK.YLIM
+        zlim = PARAMS_VTK.ZLIM
+        plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
     pass

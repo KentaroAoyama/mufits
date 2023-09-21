@@ -52,7 +52,8 @@ from constants import (
     TIME_SS,
     TSTEP_INIT,
     TSTEP_MAX,
-    NDT,
+    NDTMIN,
+    NDTMAX,
     TMULT,
 )
 
@@ -956,11 +957,9 @@ def generate_input(
         while years_total < TIME_SS:
             if ts > ts_max:
                 ts = ts_max
-            tstep_rpt = ts * NDT
+            tstep_rpt = ts * (NDTMIN + years_total / TIME_SS * (NDTMAX - NDTMIN))
             if TIME_SS - years_total < tstep_rpt / 365.25:
                 tstep_rpt = (TIME_SS - years_total) * 365.25
-            elif ts == ts_max:
-                tstep_rpt = ts * 100.0
             time_rpt += tstep_rpt
             tsmax, tsmin = ts, TSTEP_INIT
             __write("TUNING")

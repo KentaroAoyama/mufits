@@ -8,7 +8,7 @@ class PARAMS:
         pres_src: float = 50.0,
         temp_src: float = 700.0,
         comp1t: float = 0.005,
-        rain_unit: float = 1.50339178,
+        rain_unit: float = 3.53,
         xco2_rain: float = 3.8e-4,
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
         perm_vent: float = 10.0,
