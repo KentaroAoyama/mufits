@@ -1,4 +1,5 @@
 from pathlib import Path
+from sys import float_info #!
 
 ORIGIN = (42.690531, 141.376630, 1041.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
@@ -156,6 +157,8 @@ DXYZ = (
 # NOTE: unit of "HCONDCF" is W/(m・K), "PERM" is mD
 POROS = 0.2
 PERM_HOST = 1.0e-16 / 9.869233 * 1.0e16
+# Grain density (kg/m3)
+DENS_ROCK = 2900.0
 TOPO_CONST_PROPS = {
     IDX_LAND: {
         "HCONDCFX": 2.0,
@@ -165,7 +168,7 @@ TOPO_CONST_PROPS = {
         # "PERMX": PERM_HOST,
         # "PERMY": PERM_HOST,
         # "PERMZ": PERM_HOST,
-        "DENS": 2900.0,
+        "DENS": DENS_ROCK,
         "HC": 0.84,
         "TEMPC": 20.0,
         "COMP1T": 0.0001,
@@ -178,7 +181,7 @@ TOPO_CONST_PROPS = {
         # "PERMX": 1000,
         # "PERMY": 1000,
         # "PERMZ": 1000,
-        "DENS": 2900.0,
+        "DENS": DENS_ROCK,
         "HC": 0.84,
         "TEMPC": 20.0,
         "COMP1T": 0.0001,
@@ -224,32 +227,33 @@ TOPO_CONST_PROPS = {
     },
 }
 
-# Grain density (kg/m3)
-DENS_ROCK = 2900.0
-
 # Water density (kg/m3)
 DENS_WATER = 1.0e3
 
 # Heat capacity of grain
 HC_ROCK = 0.84
 
+# gravitational acceleration
+G = 9.80665
+
 # Atmospheric pressure (MPa)
 P_GROUND = 1.013e-1
 
 # Pressure gradient (MPa/m)
-P_GRAD_AIR = 9.0e-6
-P_GRAD_SEA = 1.02e-3
-P_GRAD_LAKE = 1.0e-3
-P_GRAD_ROCK = (DENS_ROCK * (1.0 - POROS) + DENS_WATER * POROS) * 1.0e-6
+P_GRAD_AIR = 1.293 * G * 1.0e-6
+P_GRAD_SEA = 1.02e3 * G * 1.0e-6
+P_GRAD_LAKE = DENS_WATER * G * 1.0e-6
+P_GRAD_ROCK = DENS_WATER * G * 1.0e-6
 
 # Temperature gradient (℃/m)
 T_GRAD_AIR = 0.0
 T_GRAD_SEA = 0.0
 T_GRAD_LAKE = 0.0
-T_GRAD_ROCK = 0.03
+T_GRAD_ROCK = 0.06
 
 # Time taken to reproduce steady state (in years)
-TIME_SS = 500
+# TIME_SS = 500
+TIME_SS = 0.0001 #!
 # Initial time step (in days)
 TSTEP_INIT = 0.00001
 # Maximum time step (days)
@@ -259,4 +263,13 @@ NDTMIN = 5
 NDTMAX = 100
 TMULT = 1.05
 
-OUTDIR = r"E:\tarumai"
+OUTDIR = r"E:\tarumai_tmp"
+# CONVERSION_CRITERIA = {"TEMPC": 1.0,
+#                        "PRES": 1.0e-1,
+#                        "SAT#GAS": 1.0e-4,
+#                        "COMP1T": 1.0e-4,}
+CONVERSION_CRITERIA = {"TEMPC": float_info.max,
+                       "PRES": float_info.max,
+                       "SAT#GAS": float_info.max,
+                       "COMP1T": float_info.max,}
+CONDS_PID_MAP_NAME = "pid.txt"

@@ -16,7 +16,7 @@ from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from utils import calc_ijk, calc_m, mdarcy2si, plt_topo, plt_airbounds, calc_k_z, plt_any_val
+from utils import calc_ijk, calc_m, mdarcy2si, plt_topo, plt_airbounds, calc_k_z, plt_any_val, stack_from_0, stack_from_center
 
 from constants import (
     ORIGIN,
@@ -118,31 +118,6 @@ def __median(_ls: List) -> float:
     return np.nanmedian(_ls)
 
 
-def __stack_from_0(_ls: List[float]) -> List[float]:
-    c_ls = []
-    for i, _d in enumerate(_ls):
-        if len(c_ls) == 0:
-            c_ls.append(abs(_d) * 0.5)
-            continue
-        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
-    return c_ls
-
-
-def __stack_from_center(_ls: List[float]) -> List[float]:
-    n = len(_ls)
-    if divmod(n, 2)[1] == 0:
-        sum_left = -sum(_ls[: int(n * 0.5)])
-    else:
-        _lhalf = int(n * 0.5) + 1
-        sum_left = -sum(_ls[:_lhalf]) + 0.5 * _ls[_lhalf]
-    c_ls: List = []
-    for _d in _ls:
-        sum_left += _d * 0.5
-        c_ls.append(sum_left)
-        sum_left += _d * 0.5
-    return c_ls
-
-
 def __generate_rain_src_id(idx: int):
     return "R" + "{:07d}".format(idx)
 
@@ -154,7 +129,7 @@ def generate_simple_vent(
     xc_m: np.ndarray = np.array(xc_m)
     yc_m: np.ndarray = np.array(yc_m)
     elvc_m: np.ndarray = np.array(elvc_m)
-    zc_ls = __stack_from_0(DXYZ[2])
+    zc_ls = stack_from_0(DXYZ[2])
     zc_arr = ORIGIN[2] - np.array(zc_ls)
     for elvc, bounds in vent_bounds.items():
         dz = DXYZ[2][np.argmin(np.square(zc_arr - elvc))]
@@ -236,13 +211,13 @@ def generate_topo(
     elv_origin = origin[2]
     xc_ls, yc_ls, zc_ls = None, None, None
     if align_center:
-        xc_ls = __stack_from_center(dx_ls)
-        yc_ls = __stack_from_center(dy_ls)
-        zc_ls = __stack_from_0(dz_ls)
+        xc_ls = stack_from_center(dx_ls)
+        yc_ls = stack_from_center(dy_ls)
+        zc_ls = stack_from_0(dz_ls)
     else:
-        xc_ls = __stack_from_0(dx_ls)
-        yc_ls = __stack_from_0(dy_ls)
-        zc_ls = __stack_from_0(dz_ls)
+        xc_ls = stack_from_0(dx_ls)
+        yc_ls = stack_from_0(dy_ls)
+        zc_ls = stack_from_0(dz_ls)
 
     # get src position
     latsrc, lngsrc, elvsrc = pos_src
@@ -428,7 +403,7 @@ def generamte_rocknum_and_props(
             _prop["a_p"] = P_GROUND
             _prop["b_p"] = P_GRAD_ROCK
             _prop["a_t"] = topo_props[IDX_LAND]["TEMPC"]
-            _prop["b_t"] = 0.03
+            _prop["b_t"] = T_GRAD_ROCK
 
     # permeability
     perm_ls = np.zeros(len(topo_ls)).tolist()
@@ -465,7 +440,7 @@ def generamte_rocknum_and_props(
                     continue
                 z += gz[k] * 0.5
                 prop: Dict = lateral_props.setdefault((i + 1, j + 1, k + 1), {})
-                prop["FLUXNUM"] = fluxnum  # NOTE:
+                prop["FLUXNUM"] = fluxnum
                 prop["TEMPC"] = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"] + T_GRAD_ROCK * z
                 prop["PRES"] = P_GROUND + P_GRAD_ROCK * z
                 prop["COMP1T"] = TOPO_CONST_PROPS[IDX_LAND]["COMP1T"]
@@ -952,7 +927,6 @@ def generate_input(
         years_total = 0.0
         ts = TSTEP_INIT
         ts_max = calc_tstep(params.VENT_SCALE, params.INJ_RATE)
-        print(ts_max)
         time_rpt = 0.0
         while years_total < TIME_SS:
             if ts > ts_max:
@@ -1089,7 +1063,7 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
     # perm_si_ls = [mdarcy2si(i) for i in perm_ls]
     # perm_with_nan = np.where(np.array(perm_si_ls) == 0, np.nan, np.array(perm_si_ls))
-    # plt_any_val(np.log10(perm_with_nan), __stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in __stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
+    # plt_any_val(np.log10(perm_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
     # relative permeability
     # sattab = calc_sattab(method="None")
 

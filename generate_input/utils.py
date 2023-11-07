@@ -20,6 +20,30 @@ def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
 def calc_m(i: int, j: int, k: int, nx: int, ny: int) -> int:
     return nx * ny * k + nx * j + i
 
+def stack_from_0(_ls: List[float]) -> List[float]:
+    c_ls = []
+    for i, _d in enumerate(_ls):
+        if len(c_ls) == 0:
+            c_ls.append(abs(_d) * 0.5)
+            continue
+        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+    return c_ls
+
+
+def stack_from_center(_ls: List[float]) -> List[float]:
+    n = len(_ls)
+    if divmod(n, 2)[1] == 0:
+        sum_left = -sum(_ls[: int(n * 0.5)])
+    else:
+        _lhalf = int(n * 0.5) + 1
+        sum_left = -sum(_ls[:_lhalf]) + 0.5 * _ls[_lhalf]
+    c_ls: List = []
+    for _d in _ls:
+        sum_left += _d * 0.5
+        c_ls.append(sum_left)
+        sum_left += _d * 0.5
+    return c_ls
+
 
 def calc_k_z(z: float) -> float:
     """Permeability with depth dependence
@@ -225,7 +249,6 @@ def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
         fig.savefig(ydir.joinpath(f"{str(y)}.png"), dpi=200, bbox_inches="tight")
         plt.clf()
         plt.close()
-
 
 def si2mdarcy(perm: float) -> float:
     return perm / 9.869233 * 1.0e16
