@@ -59,6 +59,12 @@ def calc_k_z(z: float) -> float:
     """
     return 10.0 ** (-14.0 - 3.2 * log10(z / 1000.0)) / 9.869233 * 1.0e16
 
+def condition_to_dir(
+    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float
+) -> PathLike:
+    base_dir = Path(base_dir)
+    return base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
+
 
 def plt_topo(
     topo_ls: List, latc_ls: List, lngc_ls: List, nxyz: Tuple[int], savedir: PathLike

@@ -252,8 +252,8 @@ T_GRAD_LAKE = 0.0
 T_GRAD_ROCK = 0.06
 
 # Time taken to reproduce steady state (in years)
-# TIME_SS = 500
-TIME_SS = 0.0001 #!
+TIME_SS = 500
+
 # Initial time step (in days)
 TSTEP_INIT = 0.00001
 # Maximum time step (days)
@@ -263,13 +263,13 @@ NDTMIN = 5
 NDTMAX = 100
 TMULT = 1.05
 
-OUTDIR = r"E:\tarumai_tmp"
-# CONVERSION_CRITERIA = {"TEMPC": 1.0,
-#                        "PRES": 1.0e-1,
-#                        "SAT#GAS": 1.0e-4,
-#                        "COMP1T": 1.0e-4,}
-CONVERSION_CRITERIA = {"TEMPC": float_info.max,
-                       "PRES": float_info.max,
-                       "SAT#GAS": float_info.max,
-                       "COMP1T": float_info.max,}
+OUTDIR = r"E:\tarumai2"
+CONVERSION_CRITERIA = {"TEMPC": 1.0e-1,
+                       "PRES": 1.0e-1,
+                       "SAT#GAS": 1.0e-4,
+                       "COMP1T": 1.0e-4,}
+# CONVERSION_CRITERIA = {"TEMPC": float_info.max,
+#                        "PRES": float_info.max,
+#                        "SAT#GAS": float_info.max,
+#                        "COMP1T": float_info.max,}
 CONDS_PID_MAP_NAME = "pid.txt"

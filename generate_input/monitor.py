@@ -11,8 +11,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 import pickle
 
-from constants import CONVERSION_CRITERIA, DXYZ, CACHE_DIR, IDX_AIR, CONDS_PID_MAP_NAME
-from utils import calc_ijk, stack_from_center, stack_from_0
+from constants import CONVERSION_CRITERIA, DXYZ, CACHE_DIR, IDX_AIR, CONDS_PID_MAP_NAME, OUTDIR
+from utils import calc_ijk, stack_from_center, stack_from_0, condition_to_dir
 
 ENCODING = 'windows-1251'
 NX, NY, NZ = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
@@ -195,15 +195,16 @@ def plt_conv(time_ls, changerate_ls, fpth: PathLike):
     plt.clf()
     plt.close()
 
-def monitor_process(conds_dct: Dict[Tuple, Any], process_ls: List[Any]) -> None or int:
+def monitor_process(conds_dct: Dict[Tuple, Any]) -> None or int:
     # i, change_rate
     conds_status: Dict = {}
     conds_remain_ls = [i for i in conds_dct]
-    process_ls = process_ls.copy()
+    # process_ls = process_ls.copy()
     while len(conds_remain_ls) > 0:
         if len(conds_dct) == 0:
             return None
-        for conds, process in zip(conds_remain_ls, process_ls):
+        # for conds, process in zip(conds_remain_ls, process_ls):
+        for conds in conds_remain_ls:
             prop = conds_dct[conds]
             SimDir: Path = prop["DirPth"]
             MonitorPth: Path = prop["MonitorPth"]
@@ -233,9 +234,16 @@ def monitor_process(conds_dct: Dict[Tuple, Any], process_ls: List[Any]) -> None 
                 plt_conv(status["time"], status[metric], MonitorPth.joinpath(f"{metric}.png"))
 
             if is_converged:
-                process.kill()
+                _str = str(condition_to_dir(OUTDIR, *conds))
+                pid: int = None
+                with open(Path(SimDir).joinpath("tmp").joinpath(CONDS_PID_MAP_NAME), "r") as f:
+                    for line in reversed(f.readlines()):
+                        if _str in line:
+                            line = line.replace("\n", "")
+                            line = line.replace(f"{_str}, ", "")
+                            pid = int(line)
+                kill(pid, 15)
                 conds_remain_ls.remove(conds)
-                process_ls.remove(process)
                 logger.debug("DONE")
                 print(f"{MonitorPth} DONE")
 
@@ -248,7 +256,7 @@ def _is_writting(fpth: PathLike) -> bool:
         return True
     else:
         return False
-    
+
 def _is_enough_size(fpth: PathLike, criteria: int=2000000) -> bool:
     if path.getsize(fpth) > criteria:
         return True
@@ -319,6 +327,13 @@ def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=
         plt.clf()
         plt.close()
 
+def plot_results(fpth) -> None:
+    fpth = Path(fpth)
+    for prop_name in CONVERSION_CRITERIA:
+        for axis in ("X", "Y", "Z"):
+            savedir = fpth.parent.joinpath(prop_name).joinpath(axis)
+            makedirs(savedir, exist_ok=True)
+            plot_sum(fpth, prop_name, savedir, True, axis)
 
 if __name__ == "__main__":
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
@@ -327,7 +342,7 @@ if __name__ == "__main__":
     #         print(prop)
     #     if isnan(prop["PRES"]):
     #         print(i)
-    plot_sum(r"E:\tarumai2\200.0_0.0_10000.0_10.0\tmp.2495.SUM", "PRES", r"E:\tarumai2\200.0_0.0_10000.0_10.0\PRES\X", True, "X")
+    plot_results(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0159.SUM")
     # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "TEMPC")
     # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "PRES")
     # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "SAT#GAS")
