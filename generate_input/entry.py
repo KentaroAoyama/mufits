@@ -71,10 +71,10 @@ def main(max_workers: int = cpu_count() - 5):
     cou = 0
     makedirs(base_dir, exist_ok=True)
     # process_ls: List[Process] = []
-    for perm_vent in conditions["pearm"]:
-        for temp in conditions["tempe"]:
-            for comp1t in conditions["comp1t"]:
-                for inj_rate in conditions["inj_rate"]:
+    for temp in conditions["tempe"]:
+        for comp1t in conditions["comp1t"]:
+            for inj_rate in conditions["inj_rate"]:
+                for perm_vent in conditions["pearm"]:
                     sim_dir: Path = condition_to_dir(base_dir, temp, comp1t, inj_rate, perm_vent)
                     makedirs(sim_dir, exist_ok=True)
                     # process = Process(temp, comp1t, inj_rate, perm_vent, sim_dir)
@@ -96,5 +96,5 @@ def main(max_workers: int = cpu_count() - 5):
 
 
 if __name__ == "__main__":
-    main()
+    main(10)
     pass

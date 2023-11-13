@@ -16,7 +16,7 @@ from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from utils import calc_ijk, calc_m, mdarcy2si, plt_topo, plt_airbounds, calc_k_z, plt_any_val, stack_from_0, stack_from_center
+from utils import calc_ijk, calc_m, mdarcy2si, plt_topo, plt_airbounds, calc_k_z, plt_any_val, stack_from_0, stack_from_center, calc_press_air, calc_xco2_rain
 
 from constants import (
     ORIGIN,
@@ -490,9 +490,12 @@ def get_air_bounds(topo_ls, nxyz):
     return m_bounds
 
 
-def calc_tstep(perm: float, q: float, A: float=0.0006743836062232225, B: float=0.4737982349312893) -> float:
-    _max = 300.0 * (exp(-B * (log10(perm) - 1.0)))
+# def calc_tstep(perm: float, q: float, A: float=0.0006743836062232225, B: float=0.4737982349312893) -> float:
+def calc_tstep(perm: float, q: float, A: float=0.0001, B: float=0.2) -> float:
+    # _max = 300.0 * (exp(-B * (log10(perm) - 1.0))) # before fix pressure gradient
+    _max = 100.0 * (exp(-B * (log10(perm) - 1.0)))
     return _max * exp(-A * q)
+
 
 def write(_f: TextIO, _string: str):
     _string += "\n"
@@ -800,8 +803,7 @@ def generate_input(
         thermodynamic parameters of the phase. The 2nd column is
         pressure, the 3rd is the enthalpy, the 4th and 5th are the molar
         composition of binary mixture.
-        We define two phases. The 1st is the liquid water (LH2O). The 2nd is
-        the supercritical CO2 phase.
+        NOTE: Used values are quated from Senario 10 in CourceC
         """
         __write("PHASES                               We define phases for output:")
         __write("-- name   pres  enth  CO2 H2O")
@@ -881,11 +883,18 @@ def generate_input(
         __write(f"  PRES {pres} ’MAGMASRC’ /")
         __write(f"  TEMPC {tempe} ’MAGMASRC’/")
         __write(f"  COMP1T {comp1t} ’MAGMASRC’/")
+
         # RAINSRC
-        for idx in range(len(m_airbounds)):
-            __write(f"  PRES 0.1 ’{idx}’ /")
+        zc_ls = stack_from_0(gz)
+        for idx, m in enumerate(m_airbounds):
+            # calculate CO2 fraction of rain source
+            i, j, k = calc_ijk(m, nx, ny)
+            elv = ORIGIN[2] - zc_ls[k]
+            ptol = calc_press_air(elv)
+            xco2_rain = calc_xco2_rain(ptol, params.XCO2_AIR)
+            __write(f"  PRES {ptol * 1.0e-6} ’{idx}’ /")
             __write(f"  TEMPC {params.TEMP_RAIN} ’{idx}’ /")
-            __write(f"  COMP1T {params.XCO2_RAIN} ’{idx}’ /")
+            __write(f"  COMP1T {xco2_rain} ’{idx}’ /")
         __write("/")
         __write("")  # \n
         __write("")  # \n

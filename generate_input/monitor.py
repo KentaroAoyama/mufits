@@ -187,10 +187,11 @@ def calc_change_rate(props_ls: List[Tuple[Dict, Dict, float]], prop_name: str) -
 
 def plt_conv(time_ls, changerate_ls, fpth: PathLike):
     fig, ax = plt.subplots()
+    ax.plot(time_ls, changerate_ls)
     ax.set_xscale("log")
+    # ax.set_yscale("log")
     ax.set_xlabel("DAYS")
     ax.set_ylabel("Change Rate")
-    ax.plot(time_ls, changerate_ls)
     fig.savefig(fpth, bbox_inches="tight", dpi=200)
     plt.clf()
     plt.close()
@@ -263,8 +264,7 @@ def _is_enough_size(fpth: PathLike, criteria: int=2000000) -> bool:
     else:
         False
 
-def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=True, axis="Y") -> None:
-    
+def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=True, axis="Y", show_time: bool=True, indexes: Tuple[int]=None) -> None:
     cache_topo = CACHE_DIR.joinpath("topo_ls")
     topo_ls: List[int] = None
     if cache_topo.exists():
@@ -281,7 +281,7 @@ def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=
         with open(cachepth, "rb") as pkf:
             cellid_props = pickle.load(pkf)
     else:
-        cellid_props, _, _ = load_sum(fpth)
+        cellid_props, _, time = load_sum(fpth)
     v_ls = get_v_ls(cellid_props, prop_name)
     v_ls = v_ls[:NX * NY * NZ]
 
@@ -317,33 +317,56 @@ def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=
     dirpth = Path(savedir)
     makedirs(dirpth, exist_ok=True)
     for i, val2d in enumerate(val_3d):
+        if indexes is not None:
+            if i not in indexes:
+                continue
         fpth = dirpth.joinpath(f"{i}.png")
         fig, ax = plt.subplots()
         mappable = ax.pcolormesh(grid_x, grid_y, val2d)
         pp = fig.colorbar(mappable, ax=ax, orientation="vertical")
         pp.set_label(prop_name)
         ax.set_aspect("equal")
+        plt.tick_params(labelsize=8)
+        if show_time:
+            ax.set_title('{:.3f}'.format(time))
         fig.savefig(fpth, dpi=200, bbox_inches="tight")
         plt.clf()
         plt.close()
 
-def plot_results(fpth) -> None:
+def plot_results(fpth, axis: Tuple[str]=("X", "Y", "Z")) -> None:
     fpth = Path(fpth)
     for prop_name in CONVERSION_CRITERIA:
-        for axis in ("X", "Y", "Z"):
-            savedir = fpth.parent.joinpath(prop_name).joinpath(axis)
+        for ax in axis:
+            savedir = fpth.parent.joinpath(prop_name).joinpath(ax)
             makedirs(savedir, exist_ok=True)
-            plot_sum(fpth, prop_name, savedir, True, axis)
+            plot_sum(fpth, prop_name, savedir, True, ax)
+
 
 if __name__ == "__main__":
+    # plot_results(r"E:\tarumai\700.0_0.0_1000.0_10.0\tmp.0374.SUM", ("Y"))
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
     # for i, (_, prop) in enumerate(cellid_props.items()):
     #     if i == 0:
     #         print(prop)
     #     if isnan(prop["PRES"]):
     #         print(i)
-    plot_results(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0159.SUM")
-    # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "TEMPC")
-    # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "PRES")
-    # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "SAT#GAS")
-    # plt_conv(r"E:\tarumai\200.0_0.0_100.0_10.0", "COMP1T")
+    plot_results(r"E:\tarumai2\200.0_0.0_10000.0_10.0\tmp.0448.SUM", axis=("Y"))
+
+
+    # props_ls = load_props_ls(0, Path(r"E:\tarumai3\200.0_0.0_100.0_10.0"))
+    # time_ls, v_ls = calc_change_rate(props_ls, "TEMPC")
+    # plt.plot(time_ls, v_ls)
+    # plt.xscale("log")
+    # plt.yscale("log")
+    # plt.show()
+
+    
+    # dirpth = Path(r"E:\tarumai\200.0_0.1_100.0_10.0")
+    # figdir = dirpth.joinpath("TIMESTEP")
+    # for i in range(180, 1000):
+    #     fn = str(i).zfill(4)
+    #     fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+    #     plot_sum(fpth, "SAT#GAS", figdir.joinpath(fn), True, "Y", True, (21,))
+
+
+    pass

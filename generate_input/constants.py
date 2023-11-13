@@ -1,5 +1,4 @@
 from pathlib import Path
-from sys import float_info #!
 
 ORIGIN = (42.690531, 141.376630, 1041.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
@@ -169,9 +168,9 @@ TOPO_CONST_PROPS = {
         # "PERMY": PERM_HOST,
         # "PERMZ": PERM_HOST,
         "DENS": DENS_ROCK,
-        "HC": 0.84,
+        "HC": 1.0,
         "TEMPC": 20.0,
-        "COMP1T": 0.0001,
+        "COMP1T": 1.0e-7,
     },
     IDX_VENT: {
         "HCONDCFX": 2.0,
@@ -182,9 +181,9 @@ TOPO_CONST_PROPS = {
         # "PERMY": 1000,
         # "PERMZ": 1000,
         "DENS": DENS_ROCK,
-        "HC": 0.84,
+        "HC": 1.0,
         "TEMPC": 20.0,
-        "COMP1T": 0.0001,
+        "COMP1T": 1.0e-7,
     },
     IDX_SEA: {
         "HCONDCFX": 0.6,
@@ -230,14 +229,18 @@ TOPO_CONST_PROPS = {
 # Water density (kg/m3)
 DENS_WATER = 1.0e3
 
-# Heat capacity of grain
-HC_ROCK = 0.84
+# Heat capacity of grain (Stissi et al., 2021; Hikcs et al., 2009 (10.1029/2008JB006198))
+HC_ROCK = 1.0
 
 # gravitational acceleration
 G = 9.80665
 
 # Atmospheric pressure (MPa)
 P_GROUND = 1.013e-1
+
+# Henry's constant for CO2 gas to water
+# https://www.eng-book.com/pdfs/879040e33a05a0e5f1cb85580ef77ad1.pdf
+Kh = 0.104e4 * P_GROUND * 1.0e6 # # NOTE: at 10℃, unit: Pa
 
 # Pressure gradient (MPa/m)
 P_GRAD_AIR = 1.293 * G * 1.0e-6
@@ -257,19 +260,15 @@ TIME_SS = 500
 # Initial time step (in days)
 TSTEP_INIT = 0.00001
 # Maximum time step (days)
-TSTEP_MAX = 300.0
+TSTEP_MAX = 300.0 # not used
 # number of iterations for each TSTEP_MAX
 NDTMIN = 5
 NDTMAX = 100
 TMULT = 1.05
 
 OUTDIR = r"E:\tarumai2"
-CONVERSION_CRITERIA = {"TEMPC": 1.0e-1,
-                       "PRES": 1.0e-1,
+CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
+                       "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,
                        "COMP1T": 1.0e-4,}
-# CONVERSION_CRITERIA = {"TEMPC": float_info.max,
-#                        "PRES": float_info.max,
-#                        "SAT#GAS": float_info.max,
-#                        "COMP1T": float_info.max,}
 CONDS_PID_MAP_NAME = "pid.txt"

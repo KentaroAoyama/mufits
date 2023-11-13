@@ -1,5 +1,5 @@
 from copy import deepcopy
-from constants import TOPO_CONST_PROPS, IDX_VENT, IDX_AIR
+from constants import TOPO_CONST_PROPS, IDX_AIR
 
 
 class PARAMS:
@@ -9,7 +9,7 @@ class PARAMS:
         temp_src: float = 700.0,
         comp1t: float = 0.005,
         rain_unit: float = 3.53,
-        xco2_rain: float = 3.8e-4,
+        xco2_air: float = 3.8e-4,
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
         perm_vent: float = 10.0,
         inj_rate: float = 2000.0,
@@ -21,7 +21,7 @@ class PARAMS:
             temp_src (float): Temperature of magmatic source (℃).
             comp1t (float): CO2 mole fraction of magmatic source.
             rain_unit (float): Amount of rain sources (mm/day).
-            xco2_rain (float): CO2 mole fraction of rain.
+            xco2_air (float): CO2 mole fraction of rain.
             temp_rain (float): Temperature of rain sources (℃).
             perm_vent (float): Factor multiplied by the permeability of the host rock.
             inj_rate (float): Injection rate (t/day)
@@ -33,7 +33,7 @@ class PARAMS:
 
         # Rain properties
         self.RAIN_AMOUNT = rain_unit  # mm/day
-        self.XCO2_RAIN = xco2_rain
+        self.XCO2_AIR = xco2_air
         self.TEMP_RAIN = temp_rain
 
         # Vent properties

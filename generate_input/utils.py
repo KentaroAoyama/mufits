@@ -7,7 +7,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import vtk
 
-from constants import DXYZ
+from constants import DXYZ, P_GROUND, P_GRAD_AIR, Kh
 from params import PARAMS_VTK
 
 
@@ -49,7 +49,7 @@ def calc_k_z(z: float) -> float:
     """Permeability with depth dependence
 
     Reference:
-        https://doi.org/10.1029/1998RG900002
+        Manning and Ingebritsen (1999) https://doi.org/10.1029/1998RG900002
 
     Args:
         z (float): Depth from earth surface (m)
@@ -64,6 +64,30 @@ def condition_to_dir(
 ) -> PathLike:
     base_dir = Path(base_dir)
     return base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
+
+def calc_press_air(elv: float) -> float:
+    """Calculate air pressure in Pa
+
+    Args:
+        elv (float): Elevation (m)
+
+    Returns:
+        float: Air pressure (Pa)
+    """
+    return (P_GROUND - P_GRAD_AIR * elv) * 1.0e6
+
+def calc_xco2_rain(ptol: float, xco2_air: float) -> float:
+    """Calculate mole fraction of CO2 dissolved in rain by Henry's law
+
+    Args:
+        ptol (float): Total pressure in Pa (at 0m a.s.l, about 1e5 Pa)
+        xco2_air (float): Mole fraction of CO2 in the air
+
+    Returns:
+        float: Mole fraction of CO2 dissolved in rain
+    """
+    pco2 = ptol * xco2_air
+    return pco2 / Kh
 
 
 def plt_topo(
@@ -264,18 +288,19 @@ def mdarcy2si(perm: float) -> float:
 
 if __name__ == "__main__":
     # print(calc_ijk(14569  - 1, 40, 40))
-    path = Path(r"E:\tarumai\200.0_0.0_1000.0_10.0").joinpath("tmp.0358.vtu")
-    coordinates, arrays = vtu_to_numpy(str(path))
-    result_dir = Path("./result/200.0_0.0_1000.0_10.0")
-    for key, val in arrays.items():
-        if key in ("PHST", "SAT#GAS", "COMP2T"):
-            continue
-        print("===")
-        print(key)
-        outdir = result_dir.joinpath(key)
-        vlim = PARAMS_VTK.VLIM[key]
-        xlim = PARAMS_VTK.XLIM
-        ylim = PARAMS_VTK.YLIM
-        zlim = PARAMS_VTK.ZLIM
-        plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
+    # path = Path(r"E:\tarumai\200.0_0.0_1000.0_10.0").joinpath("tmp.0358.vtu")
+    # coordinates, arrays = vtu_to_numpy(str(path))
+    # result_dir = Path("./result/200.0_0.0_1000.0_10.0")
+    # for key, val in arrays.items():
+    #     if key in ("PHST", "SAT#GAS", "COMP2T"):
+    #         continue
+    #     print("===")
+    #     print(key)
+    #     outdir = result_dir.joinpath(key)
+    #     vlim = PARAMS_VTK.VLIM[key]
+    #     xlim = PARAMS_VTK.XLIM
+    #     ylim = PARAMS_VTK.YLIM
+    #     zlim = PARAMS_VTK.ZLIM
+    #     plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
+    print(calc_xco2_rain(1.0e5, 3.8e-4))
     pass
