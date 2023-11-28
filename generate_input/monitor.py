@@ -3,16 +3,18 @@ from os import PathLike, access, R_OK, path, makedirs, kill
 import struct
 from typing import List, Tuple, Dict, BinaryIO, Any, OrderedDict
 from pathlib import Path
-from math import isnan
+from math import isnan, exp, log10
 from time import sleep, time
 from logging import Logger
+import re
+from statistics import median
 
 import numpy as np
 from matplotlib import pyplot as plt
 import pickle
 
 from constants import CONVERSION_CRITERIA, DXYZ, CACHE_DIR, IDX_AIR, CONDS_PID_MAP_NAME, OUTDIR
-from utils import calc_ijk, stack_from_center, stack_from_0, condition_to_dir
+from utils import calc_ijk, stack_from_center, stack_from_0, condition_to_dir, dir_to_condition
 
 ENCODING = 'windows-1251'
 NX, NY, NZ = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
@@ -159,7 +161,7 @@ def calc_prop_diff(props0: Dict, props1: Dict, prop_name: str) -> float:
 
 def load_props_ls(i_start: int, dirpth: PathLike) -> List[Tuple[Dict, Dict, float]]:
     props_ls: List[Tuple[Dict, Dict, float]] = []
-    for i in range(i_start, 1000):
+    for i in range(i_start, 100000):
         fn = str(i).zfill(4)
         fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
         if not (fpth.exists() and access(fpth, R_OK)):
@@ -341,17 +343,87 @@ def plot_results(fpth, axis: Tuple[str]=("X", "Y", "Z")) -> None:
             makedirs(savedir, exist_ok=True)
             plot_sum(fpth, prop_name, savedir, True, ax)
 
+def _is_converged(cond_dir: Path) -> bool:
+    # check if exists .vtu file
+    for fpth in cond_dir.glob("**/*"):
+        if ".vtu" in str(fpth):
+            return True
+
+    # check logfile in tmp dir
+    logpth = cond_dir.joinpath("tmp").joinpath("log.txt")
+    if not logpth.exists():
+        return False
+    with open(logpth, "r") as f:
+        for line in reversed(f.readlines()):
+            if "DONE" in line:
+                 return True
+    return False
+
+
+def optimize_tstep(sim_dir: PathLike):
+    sim_dir: Path = Path(sim_dir)
+    perm_dt: Dict = {}
+    for conds_dir in sim_dir.iterdir():
+        # if not _is_converged(conds_dir):
+        #     continue
+        # load logfile and get maximum time step
+        logpth = conds_dir.joinpath("log.txt")
+        if not logpth.exists():
+            continue
+        print(conds_dir)
+        t, xco2, q, p = dir_to_condition(conds_dir)
+        with open(logpth, "r") as f:
+            lines: List[str] = f.readlines()
+            dt_ls = []
+            for i, line in enumerate(lines):
+                if "WAR: RECALCULATION" in line:
+                    dtline = lines[i+3]
+                    dt_ls.append(float(re.search(r'\d+.\d+ DAYS', dtline).group().replace(" DAYS", "")))
+            if len(dt_ls) > 0:
+                _ls: List = perm_dt.setdefault(p, [[], []])
+                _ls[0].append(q)
+                _ls[1].append(median(dt_ls))
+
+    # fit
+    def _func(p_ls, q_ls, A: float=0.0001, B: float=0.2):
+        v = []
+        for _p, _q in zip(p_ls, q_ls):
+            _max = 50.0 * (exp(-B * (log10(_p) - 1.0)))
+            _max *= exp(-A * _q)
+            v.append(_max)
+        return v
+
+    fig, ax = plt.subplots()
+    for perm, results in perm_dt.items():
+        q, ts = results[0], results[1]
+        q = sorted(q)
+
+        ax.plot(q, _func([perm for _ in range(len(q))], q))
+        ax.scatter(results[0], results[1], label=perm)
+    ax.legend()
+    ax.set_xlabel("Mass Rate (t/day)")
+    ax.set_ylabel("Maximum Time Step (day)")
+    fig.savefig("tmp.png", dpi=300)
+    plt.show()
+    plt.clf()
+    plt.close()
 
 if __name__ == "__main__":
-    # plot_results(r"E:\tarumai\700.0_0.0_1000.0_10.0\tmp.0374.SUM", ("Y"))
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
     # for i, (_, prop) in enumerate(cellid_props.items()):
     #     if i == 0:
     #         print(prop)
     #     if isnan(prop["PRES"]):
     #         print(i)
-    plot_results(r"E:\tarumai2\200.0_0.0_10000.0_10.0\tmp.0448.SUM", axis=("Y"))
+    
+    plot_results(r"E:\tarumai2\300.0_0.0_100.0_10.0\tmp.0011.SUM", ("Y"))
+    
+    # kill(16116, 15)
 
+    # props_ls: List = load_props_ls(6102, Path(r"E:\tarumai6\200.0_0.001_1000.0_1000.0"))
+    # for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
+    #     time_ls, changerate_ls = calc_change_rate(props_ls, metric)
+    #     print(changerate_ls)
 
     # props_ls = load_props_ls(0, Path(r"E:\tarumai3\200.0_0.0_100.0_10.0"))
     # time_ls, v_ls = calc_change_rate(props_ls, "TEMPC")
@@ -361,12 +433,12 @@ if __name__ == "__main__":
     # plt.show()
 
     
-    # dirpth = Path(r"E:\tarumai\200.0_0.1_100.0_10.0")
+    # dirpth = Path(r"E:\tarumai6\200.0_0.0_100.0_10000.0")
     # figdir = dirpth.joinpath("TIMESTEP")
-    # for i in range(180, 1000):
+    # for i in range(10, 1000, 20):
     #     fn = str(i).zfill(4)
     #     fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
-    #     plot_sum(fpth, "SAT#GAS", figdir.joinpath(fn), True, "Y", True, (21,))
+    #     plot_sum(fpth, "COMP1T", figdir.joinpath(fn), True, "Y", True, (21,))
 
-
+    # optimize_tstep(r"E:\tarumai2")
     pass

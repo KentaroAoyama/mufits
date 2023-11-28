@@ -10,17 +10,31 @@ from pathlib import Path
 from os import PathLike, makedirs, getcwd
 import pickle
 from math import exp, log10
+from copy import deepcopy
 
 import pandas as pd
 from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
 
-from utils import calc_ijk, calc_m, mdarcy2si, plt_topo, plt_airbounds, calc_k_z, plt_any_val, stack_from_0, stack_from_center, calc_press_air, calc_xco2_rain
+from utils import (
+    calc_ijk,
+    calc_m,
+    mdarcy2si,
+    plt_topo,
+    plt_airbounds,
+    calc_k_z,
+    plt_any_val,
+    stack_from_0,
+    stack_from_center,
+    calc_press_air,
+    calc_xco2_rain,
+)
 
 from constants import (
     ORIGIN,
     POS_SRC,
+    POS_SINK,
     DEM_PTH,
     SEADEM_PTH,
     CRS_RECT,
@@ -43,18 +57,19 @@ from constants import (
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
     TOPO_CONST_PROPS,
+    TEMPE_AIR,
+    G,
     P_GROUND,
     P_GRAD_AIR,
-    P_GRAD_SEA,
-    P_GRAD_LAKE,
     P_GRAD_ROCK,
     T_GRAD_ROCK,
     TIME_SS,
     TSTEP_INIT,
     TSTEP_MAX,
-    NDTMIN,
-    NDTMAX,
+    NDTFIRST,
+    NDTEND,
     TMULT,
+    SINK_PARAMS
 )
 
 from params import PARAMS
@@ -152,6 +167,7 @@ def generate_topo(
     dxyz: Tuple[List, List, List],
     origin: Tuple[float, float, float],
     pos_src: Tuple[float, float, float],
+    pos_sink: Dict,
     align_center: bool = True,
 ) -> List[int]:
     # TODO: docstring & output type
@@ -336,7 +352,22 @@ def generate_topo(
                 xc_m[m] = xc_ls[i]
                 yc_m[m] = -yc_ls[j]
                 zc_m[m] = elvc
-    return topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, isrc, jsrc, ksrc)
+
+    # get sink position
+    pos_sink_ijk = {}
+    for name, pos in pos_sink.items():
+        latsink, lngsink, _ = pos
+        xsink, ysink = transformer_wgs.transform(lngsink, latsink)
+        isink = np.argmin(np.square(np.array(xc_ls) - (xsink - x_origin)))
+        jsink = np.argmin(np.square(np.array(yc_ls) - (y_origin - ysink)))
+        ksink = None
+        for k in range(nz):
+            m = calc_m(isink, jsink, k, nx, ny)
+            if topo_ls[m] in (IDX_LAND, IDX_VENT):
+                ksink = k
+                break
+        pos_sink_ijk.setdefault(name, (isink, jsink, ksink))
+    return topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, (isrc, jsrc, ksrc), pos_sink_ijk)
 
 
 def generate_act_ls(topo_ls: List[int]) -> List[int]:
@@ -361,7 +392,6 @@ def generamte_rocknum_and_props(
     topo_props: Dict,
     vent_scale: float,
 ) -> Tuple[List, Dict, Dict, Dict, Dict]:
-    # TODO: lateral boundary locations and props (i, j, k): prop
     nx, ny, nz = nxyz
     topo_unique = []
     for _idx in topo_ls:
@@ -375,41 +405,42 @@ def generamte_rocknum_and_props(
         rocknum_ls.append(rocknum)
         rocknum_params.setdefault(rocknum, topo_props[_idx])
 
-    rocknum_ptgrad = {}
-    for _idx in topo_unique:
-        _prop = rocknum_ptgrad.setdefault(topo_rocknum_map[_idx], {})
-        if _idx == IDX_AIR:
-            _prop["a_p"] = P_GROUND - top * P_GRAD_AIR
-            _prop["b_p"] = P_GRAD_AIR
-            _prop["a_t"] = topo_props[IDX_AIR]["TEMPC"]
-            _prop["b_t"] = 0.0
-        elif _idx == IDX_LAKE:
-            elv_lake: float = None
-            for m, _idx_tmp in enumerate(topo_ls):
-                if _idx_tmp == IDX_LAKE:
-                    _, _, k = calc_ijk(m, nx, ny)
-                    elv_lake = top - sum(gz[: k + 1])
-                    break
-            _prop["a_p"] = P_GROUND - elv_lake * P_GRAD_AIR
-            _prop["b_p"] = P_GRAD_LAKE
-            _prop["a_t"] = topo_props[IDX_LAKE]["TEMPC"]
-            _prop["b_t"] = 0.0
-        elif _idx == IDX_SEA:
-            _prop["a_p"] = P_GROUND
-            _prop["b_p"] = P_GRAD_SEA
-            _prop["a_t"] = topo_props[IDX_SEA]["TEMPC"]
-            _prop["b_t"] = 0.0
-        else:
-            _prop["a_p"] = P_GROUND
-            _prop["b_p"] = P_GRAD_ROCK
-            _prop["a_t"] = topo_props[IDX_LAND]["TEMPC"]
-            _prop["b_t"] = T_GRAD_ROCK
+    # rocknum_ptgrad = {}
+    # for _idx in topo_unique:
+    #     _prop = rocknum_ptgrad.setdefault(topo_rocknum_map[_idx], {})
+    #     if _idx == IDX_AIR:
+    #         _prop["a_p"] = P_GROUND - top * P_GRAD_AIR
+    #         _prop["b_p"] = P_GRAD_AIR
+    #         _prop["a_t"] = topo_props[IDX_AIR]["TEMPC"]
+    #         _prop["b_t"] = 0.0
+    #     elif _idx == IDX_LAKE:
+    #         elv_lake: float = None
+    #         for m, _idx_tmp in enumerate(topo_ls):
+    #             if _idx_tmp == IDX_LAKE:
+    #                 _, _, k = calc_ijk(m, nx, ny)
+    #                 elv_lake = top - sum(gz[: k + 1])
+    #                 break
+    #         _prop["a_p"] = P_GROUND - elv_lake * P_GRAD_AIR
+    #         _prop["b_p"] = P_GRAD_LAKE
+    #         _prop["a_t"] = topo_props[IDX_LAKE]["TEMPC"]
+    #         _prop["b_t"] = 0.0
+    #     elif _idx == IDX_SEA:
+    #         _prop["a_p"] = P_GROUND
+    #         _prop["b_p"] = P_GRAD_SEA
+    #         _prop["a_t"] = topo_props[IDX_SEA]["TEMPC"]
+    #         _prop["b_t"] = 0.0
+    #     else:
+    #         _prop["a_p"] = P_GROUND
+    #         _prop["b_p"] = P_GRAD_ROCK
+    #         _prop["a_t"] = topo_props[IDX_LAND]["TEMPC"]
+    #         _prop["b_t"] = T_GRAD_ROCK
 
     # permeability
-    perm_ls = np.zeros(len(topo_ls)).tolist()
+    zeros: List = np.zeros(len(topo_ls)).tolist()
+    perm_ls = deepcopy(zeros)
     for j in range(ny):
         for i in range(nx):
-            z = 0.1
+            z = 0.0
             for k in range(nz):
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
@@ -424,9 +455,53 @@ def generamte_rocknum_and_props(
                     perm_ls[m] = calc_k_z(z)
                 z += gz[k] * 0.5
 
+    # T
+    tempe_ls, pres_ls, xco2_ls = deepcopy(zeros), deepcopy(zeros), deepcopy(zeros)
+    for j in range(ny):
+        for i in range(nx):
+            z = 0.0  # depth from top of the land
+            for k in range(nz):
+                m = calc_m(i, j, k, nx, ny)
+                _idx = topo_ls[m]
+                # depth from earth surface (m)
+                if _idx not in (IDX_LAND, IDX_VENT):
+                    tempe_ls[m] = topo_props[_idx]["TEMPC"]
+                    continue
+                z += gz[k] * 0.5
+                tempe_ls[m] = TEMPE_AIR + T_GRAD_ROCK * z
+                z += gz[k] * 0.5
+    # P
+    for j in range(ny):
+        for i in range(nx):
+            z = 0.0  # depth from top of the land
+            p_top = P_GROUND - P_GRAD_AIR * top
+            for k in range(nz):
+                m = calc_m(i, j, k, nx, ny)
+                _idx = topo_ls[m]
+                z += gz[k] * 0.5
+                rho = None
+                if _idx in (IDX_LAND, IDX_VENT):
+                    rho = 1000.0
+                else:
+                    rho = TOPO_CONST_PROPS[_idx]["DENS"]
+                dp = rho * G * (gz[k] * 0.5) * 1.0e-6
+                p_top += dp
+                pres_ls[m] = p_top
+                z += gz[k] * 0.5
+                p_top += dp
+
+    # XCO2
+    for j in range(ny):
+        for i in range(nx):
+            z = 0.0  # depth from top of the land
+            for k in range(nz):
+                m = calc_m(i, j, k, nx, ny)
+                _idx = topo_ls[m]
+                xco2_ls[m] = TOPO_CONST_PROPS[_idx]["COMP1T"]
+
     # lateral boundary
     lateral_props: Dict = {}
-    fluxnum = 101
+    fluxnum = 200
     for j in range(ny):
         for i in range(nx):
             if i not in (0, nx) and j not in (0, ny):
@@ -446,7 +521,15 @@ def generamte_rocknum_and_props(
                 prop["COMP1T"] = TOPO_CONST_PROPS[IDX_LAND]["COMP1T"]
                 z += gz[k] * 0.5
                 fluxnum += 1
-    return rocknum_ls, perm_ls, rocknum_params, rocknum_ptgrad, lateral_props
+    return (
+        rocknum_ls,
+        perm_ls,
+        rocknum_params,
+        tempe_ls,
+        pres_ls,
+        xco2_ls,
+        lateral_props,
+    )
 
 
 def calc_sattab(method="corey") -> Dict:
@@ -491,9 +574,9 @@ def get_air_bounds(topo_ls, nxyz):
 
 
 # def calc_tstep(perm: float, q: float, A: float=0.0006743836062232225, B: float=0.4737982349312893) -> float:
-def calc_tstep(perm: float, q: float, A: float=0.0001, B: float=0.2) -> float:
+def calc_tstep(perm: float, q: float, A: float = 0.0001, B: float = 0.2) -> float:
     # _max = 300.0 * (exp(-B * (log10(perm) - 1.0))) # before fix pressure gradient
-    _max = 100.0 * (exp(-B * (log10(perm) - 1.0)))
+    _max = 50.0 * (exp(-B * (log10(perm) - 1.0)))
     return _max * exp(-A * q)
 
 
@@ -511,10 +594,13 @@ def generate_input(
     perm_ls: List,
     rocknum_params: Dict,
     lateral_bounds: Dict,
-    rocknum_pres_grad: Dict,
+    tempe_ls: List,
+    pres_ls: List,
+    xco2_ls: List,
     m_airbounds: List[int],
     sattab: Tuple,
     src_props: Dict,
+    sink_props: Dict,
     params: PARAMS,
     fpth: PathLike,
 ):
@@ -627,6 +713,11 @@ def generate_input(
         __write(
             f"   100   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
         )
+        # for i, (_, pos) in enumerate(sink_props.items()):
+        #     sinki, sinkj, sinkk = pos
+        #     __write(
+        #         f"  {i + 101}   {sinki} {sinki} {sinkj} {sinkj} {sinkk} {sinkk} 'K-'  5*                   INFTHIN   4* 2  1 /    <- SINKSRC"
+        #     )
 
         # lateral boundary block locations
         for (i, j, k), prop in lateral_bounds.items():
@@ -658,6 +749,9 @@ def generate_input(
         __write("SRCSPECG")
         # MAGMASRC
         __write(f" ’MAGMASRC’ {srci} {srcj} {srck} /")
+        # FUMAROLE
+        for name, (sinki, sinkj, sinkk) in sink_props.items():
+            __write(f" ’{name}’ {sinki + 1} {sinkj + 1} {sinkk + 1} /")
         # RAINSRC
         for idx, m in enumerate(m_airbounds):
             i, j, k = calc_ijk(m, nx, ny)
@@ -866,15 +960,43 @@ def generate_input(
         __write("/")
         __write("")  # \n
 
-        # OPERAREG (set initial value)
-        __write("OPERAREG")
-        for rocknum, prop in rocknum_pres_grad.items():
-            ap, bp = prop["a_p"], prop["b_p"]
-            __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {ap}  {bp}  /")
-            at, bt = prop["a_t"], prop["b_t"]
-            __write(f"   TEMPC DEPTH  ROCKNUM  {rocknum} MULTA  {at}  {bt}  /")
-        __write("/")
+        # TODO: set TEMPC, PRES, and XCO2
+        # TEMPC
+        __write("TEMPC")
+        _str: str = ""
+        for _v in tempe_ls:
+            _str += str(_v) + "  "
+        _str += "  /"
+        __write(_str)
         __write("")  # \n
+
+        # PRES
+        __write("PRES")
+        _str: str = ""
+        for _v in pres_ls:
+            _str += str(_v) + "  "
+        _str += "  /"
+        __write(_str)
+        __write("")  # \n
+
+        # TEMPC
+        __write("COMP1T")
+        _str: str = ""
+        for _v in xco2_ls:
+            _str += str(_v) + "  "
+        _str += "  /"
+        __write(_str)
+        __write("")  # \n
+
+        # OPERAREG (set initial value)
+        # __write("OPERAREG")
+        # for rocknum, prop in rocknum_pres_grad.items():
+        #     ap, bp = prop["a_p"], prop["b_p"]
+        #     __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {ap}  {bp}  /")
+        #     at, bt = prop["a_t"], prop["b_t"]
+        #     __write(f"   TEMPC DEPTH  ROCKNUM  {rocknum} MULTA  {at}  {bt}  /")
+        # __write("/")
+        # __write("")  # \n
 
         # EQUALNAM
         __write("EQUALNAM")
@@ -883,7 +1005,7 @@ def generate_input(
         __write(f"  PRES {pres} ’MAGMASRC’ /")
         __write(f"  TEMPC {tempe} ’MAGMASRC’/")
         __write(f"  COMP1T {comp1t} ’MAGMASRC’/")
-
+    
         # RAINSRC
         zc_ls = stack_from_0(gz)
         for idx, m in enumerate(m_airbounds):
@@ -924,6 +1046,10 @@ def generate_input(
         # SRCINJE
         __write("SRCINJE")
         __write(f"  ’MAGMASRC’ MASS 1* 50. 1* {params.INJ_RATE} /")
+        # FUMAROLE
+        for name, sink_rate in SINK_PARAMS.items():
+            __write(f"  ’{name}’ MASS 1* 50. 1* -{sink_rate} /")
+        # RAIN
         for idx, m in enumerate(m_airbounds):
             i, j, k = calc_ijk(m, nx, ny)
             mass = 1.0e-3 * params.RAIN_AMOUNT * gx[i] * gy[j]  # t/day
@@ -936,14 +1062,22 @@ def generate_input(
         years_total = 0.0
         ts = TSTEP_INIT
         ts_max = calc_tstep(params.VENT_SCALE, params.INJ_RATE)
+        #!
+        if params.VENT_SCALE == 1000.0:
+            ts_max = 2.0
+        if params.VENT_SCALE == 10000.0:
+            ts_max = 1.0
         time_rpt = 0.0
         while years_total < TIME_SS:
             if ts > ts_max:
                 ts = ts_max
-            tstep_rpt = ts * (NDTMIN + years_total / TIME_SS * (NDTMAX - NDTMIN))
+            tstep_rpt = ts * (
+                NDTFIRST + years_total / TIME_SS * (NDTEND - NDTFIRST)
+            )  # * max(log10(params.VENT_SCALE), log10(params.INJ_RATE) - 1.0)
             if TIME_SS - years_total < tstep_rpt / 365.25:
                 tstep_rpt = (TIME_SS - years_total) * 365.25
             time_rpt += tstep_rpt
+            # time_rpt += tstep_rpt * max(log10(params.VENT_SCALE), log10(params.INJ_RATE)) #!
             tsmax, tsmin = ts, TSTEP_INIT
             __write("TUNING")
             __write(f"    1* {tsmax}   1* {tsmin} /")
@@ -951,6 +1085,11 @@ def generate_input(
             __write(f"    {time_rpt} /")
             __write("")
             years_total += tstep_rpt / 365.25
+            # tmult_tmp = TMULT - 0.01 * max(log10(params.VENT_SCALE), log10(params.INJ_RATE))
+            # if tmult_tmp > 0.0: #!
+            #     ts *= tmult_tmp #!
+            # else:
+            #     ts *= TMULT
             ts *= TMULT
 
         # REPORTS
@@ -1011,31 +1150,23 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
 
     if cache_topo.exists():
         with open(cache_topo, "rb") as pkf:
-            topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, isrc, jsrc, ksrc) = pickle.load(
+            topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos) = pickle.load(
                 pkf
             )
     else:
-        topo_ls, (
-            xc_m,
-            yc_m,
-            zc_m,
-            lat_2d,
-            lng_2d,
-            isrc,
-            jsrc,
-            ksrc,
-        ) = generate_topo(
+        topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = generate_topo(
             DEM_PTH,
             SEADEM_PTH,
             CRS_RECT,
             DXYZ,
             ORIGIN,
             POS_SRC,
+            POS_SINK,
             align_center=ALIGN_CENTER,
         )
         with open(cache_topo, "wb") as pkf:
             pickle.dump(
-                (topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, isrc, jsrc, ksrc)),
+                (topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos)),
                 pkf,
                 pickle.HIGHEST_PROTOCOL,
             )
@@ -1053,7 +1184,9 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
         rocknum_ls,
         perm_ls,
         rocknum_params,
-        rocknum_pres_grad,
+        tempe_ls,
+        pres_ls,
+        xco2_ls,
         lateral_bounds,
     ) = generamte_rocknum_and_props(
         topo_ls,
@@ -1077,9 +1210,9 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
     # sattab = calc_sattab(method="None")
 
     src_props = {
-        "i": isrc + 1,
-        "j": jsrc + 1,
-        "k": ksrc + 1,
+        "i": srcpos[0] + 1,
+        "j": srcpos[1] + 1,
+        "k": srcpos[2] + 1,
         "pres": params.PRES_SRC,
         "tempe": params.SRC_TEMP,
         "comp1t": params.SRC_COMP1T,
@@ -1094,10 +1227,13 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
         perm_ls,
         rocknum_params,
         lateral_bounds,
-        rocknum_pres_grad,
+        tempe_ls,
+        pres_ls,
+        xco2_ls,
         m_airbounds,
         None,
         src_props,
+        sinkpos,
         params,
         pth,
     )

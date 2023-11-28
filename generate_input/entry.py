@@ -70,16 +70,13 @@ def main(max_workers: int = cpu_count() - 5):
     conds_dct: OrderedDict[Future] = OrderedDict()
     cou = 0
     makedirs(base_dir, exist_ok=True)
-    # process_ls: List[Process] = []
     for temp in conditions["tempe"]:
         for comp1t in conditions["comp1t"]:
             for inj_rate in conditions["inj_rate"]:
                 for perm_vent in conditions["pearm"]:
                     sim_dir: Path = condition_to_dir(base_dir, temp, comp1t, inj_rate, perm_vent)
                     makedirs(sim_dir, exist_ok=True)
-                    # process = Process(temp, comp1t, inj_rate, perm_vent, sim_dir)
                     pool.submit(run_single_condition, temp=temp, comp1t=comp1t, inj_rate=inj_rate, perm_vent=perm_vent, sim_dir=sim_dir)
-                    # process_ls.append(process)
 
                     # monitor
                     monitor_pth = sim_dir.joinpath("tmp")
@@ -96,5 +93,5 @@ def main(max_workers: int = cpu_count() - 5):
 
 
 if __name__ == "__main__":
-    main(10)
+    main(12)
     pass

@@ -3,6 +3,14 @@ from pathlib import Path
 ORIGIN = (42.690531, 141.376630, 1041.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
 
+POS_SINK = {"A": (42.688814, 141.380509, 955.6),
+            "B": (42.689230, 141.375933, 981.0),
+            "E": (42.690010,141.376491, 989.5)}
+
+SINK_PARAMS = {"A": 200.0,
+               "B": 34.29355281207131,
+               "E": 17.55829903978051}
+
 # lat0, lat1, lng0, lng1, Correction value (added to elevation value)
 LAKE_BOUNDS = {
     "Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 255.0)
@@ -156,6 +164,7 @@ DXYZ = (
 # NOTE: unit of "HCONDCF" is W/(m・K), "PERM" is mD
 POROS = 0.2
 PERM_HOST = 1.0e-16 / 9.869233 * 1.0e16
+TEMPE_AIR = 10.0 # ℃
 # Grain density (kg/m3)
 DENS_ROCK = 2900.0
 TOPO_CONST_PROPS = {
@@ -170,7 +179,7 @@ TOPO_CONST_PROPS = {
         "DENS": DENS_ROCK,
         "HC": 1.0,
         "TEMPC": 20.0,
-        "COMP1T": 1.0e-7,
+        "COMP1T": 0.0,
     },
     IDX_VENT: {
         "HCONDCFX": 2.0,
@@ -183,13 +192,13 @@ TOPO_CONST_PROPS = {
         "DENS": DENS_ROCK,
         "HC": 1.0,
         "TEMPC": 20.0,
-        "COMP1T": 1.0e-7,
+        "COMP1T": 0.0,
     },
     IDX_SEA: {
         "HCONDCFX": 0.6,
         "HCONDCFY": 0.6,
         "HCONDCFZ": 0.6,
-        "PORO": 0.9,
+        "PORO": 1.0,
         "PERMX": 0.0,
         "PERMY": 0.0,
         "PERMZ": 0.0,
@@ -208,7 +217,7 @@ TOPO_CONST_PROPS = {
         "PERMZ": 0.0,
         "DENS": 1.293,
         "HC": 1.007,
-        "TEMPC": 10.0,
+        "TEMPC": TEMPE_AIR,
         "COMP1T": 1.0,
     },
     IDX_LAKE: {
@@ -258,17 +267,24 @@ T_GRAD_ROCK = 0.06
 TIME_SS = 500
 
 # Initial time step (in days)
-TSTEP_INIT = 0.00001
+TSTEP_INIT = 1.0e-9
 # Maximum time step (days)
 TSTEP_MAX = 300.0 # not used
 # number of iterations for each TSTEP_MAX
-NDTMIN = 5
-NDTMAX = 100
+NDTFIRST = 100
+NDTEND = 100
 TMULT = 1.05
 
-OUTDIR = r"E:\tarumai2"
+OUTDIR = r"E:\tarumai3"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,
                        "COMP1T": 1.0e-4,}
 CONDS_PID_MAP_NAME = "pid.txt"
+
+if __name__ == "__main__":
+    c = 90.0 / 200 ** (1.0/3.0)
+    qb = (50.0 / c) ** 3.0
+    qe = (40.0 / c) ** 3.0
+    print(qb, qe)
+    pass

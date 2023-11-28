@@ -65,6 +65,10 @@ def condition_to_dir(
     base_dir = Path(base_dir)
     return base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
 
+def dir_to_condition(cond_dir: PathLike) -> Tuple[float]:
+    conds_str = str(Path(cond_dir).name).split("_")
+    return (float(cond) for cond in conds_str)
+
 def calc_press_air(elv: float) -> float:
     """Calculate air pressure in Pa
 
@@ -302,5 +306,6 @@ if __name__ == "__main__":
     #     ylim = PARAMS_VTK.YLIM
     #     zlim = PARAMS_VTK.ZLIM
     #     plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
-    print(calc_xco2_rain(1.0e5, 3.8e-4))
+    print(calc_k_z(25.0))
+    # print(calc_xco2_rain(1.0e5, 3.8e-4))
     pass
