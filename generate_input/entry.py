@@ -76,6 +76,7 @@ def main(max_workers: int = cpu_count() - 5):
                 for perm_vent in conditions["pearm"]:
                     sim_dir: Path = condition_to_dir(base_dir, temp, comp1t, inj_rate, perm_vent)
                     makedirs(sim_dir, exist_ok=True)
+                    # run_single_condition(temp=temp, comp1t=comp1t, inj_rate=inj_rate, perm_vent=perm_vent, sim_dir=sim_dir)
                     pool.submit(run_single_condition, temp=temp, comp1t=comp1t, inj_rate=inj_rate, perm_vent=perm_vent, sim_dir=sim_dir)
 
                     # monitor

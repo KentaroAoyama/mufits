@@ -179,7 +179,7 @@ TOPO_CONST_PROPS = {
         "DENS": DENS_ROCK,
         "HC": 1.0,
         "TEMPC": 20.0,
-        "COMP1T": 0.0,
+        "COMP1T": 3.25e-7,
     },
     IDX_VENT: {
         "HCONDCFX": 2.0,
@@ -192,7 +192,7 @@ TOPO_CONST_PROPS = {
         "DENS": DENS_ROCK,
         "HC": 1.0,
         "TEMPC": 20.0,
-        "COMP1T": 0.0,
+        "COMP1T": 3.25e-7,
     },
     IDX_SEA: {
         "HCONDCFX": 0.6,
@@ -214,7 +214,7 @@ TOPO_CONST_PROPS = {
         "PORO": 1.0,
         "PERMX": 0.0,
         "PERMY": 0.0,
-        "PERMZ": 0.0,
+        "PERMZ": 1356152.6283925273,
         "DENS": 1.293,
         "HC": 1.007,
         "TEMPC": TEMPE_AIR,
@@ -267,7 +267,8 @@ T_GRAD_ROCK = 0.06
 TIME_SS = 500
 
 # Initial time step (in days)
-TSTEP_INIT = 1.0e-9
+TSTEP_MIN = 1.0e-12
+TSTEP_INIT = 1.0e-5
 # Maximum time step (days)
 TSTEP_MAX = 300.0 # not used
 # number of iterations for each TSTEP_MAX

@@ -76,9 +76,9 @@ def calc_press_air(elv: float) -> float:
         elv (float): Elevation (m)
 
     Returns:
-        float: Air pressure (Pa)
+        float: Air pressure (MPa)
     """
-    return (P_GROUND - P_GRAD_AIR * elv) * 1.0e6
+    return P_GROUND - P_GRAD_AIR * elv
 
 def calc_xco2_rain(ptol: float, xco2_air: float) -> float:
     """Calculate mole fraction of CO2 dissolved in rain by Henry's law
@@ -308,4 +308,5 @@ if __name__ == "__main__":
     #     plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
     print(calc_k_z(25.0))
     # print(calc_xco2_rain(1.0e5, 3.8e-4))
+    # print(calc_ijk(2811, 40, 40))
     pass

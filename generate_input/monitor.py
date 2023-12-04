@@ -408,6 +408,32 @@ def optimize_tstep(sim_dir: PathLike):
     plt.clf()
     plt.close()
 
+
+def warning_tstep(dirpth: PathLike) -> List[List]:
+    dirpth = Path(dirpth)
+    logpth = dirpth.joinpath("log.txt")
+    days, tsteps = [], []
+    with open(logpth, "r") as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if "WAR: RECALCULATION" in line:
+                m = re.search(r'\d+\.\d+ DAYS', lines[i + 2])
+                days.append(float(m.group().replace(" DAYS", "")))
+                m = re.search(r'\d+\.\d+E.\d+ SEC', lines[i + 3])
+                tsteps.append(float(m.group().replace(" SEC", "")))
+    return days, tsteps
+
+def plt_warning_tstep(dirpth: PathLike) -> None:
+    dirpth = Path(dirpth)
+    x, y = warning_tstep(dirpth)
+    fig, ax = plt.subplots()
+    ax.plot(x, y)
+    ax.set_xlabel("DAYS")
+    ax.set_ylabel("TIMESTEP (in SEC)")
+    fig.savefig(dirpth.joinpath("warning_tstep.png"), dpi=200, bbox_inches="tight")
+
+
+from utils import calc_m
 if __name__ == "__main__":
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
     # for i, (_, prop) in enumerate(cellid_props.items()):
@@ -416,7 +442,8 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
     
-    plot_results(r"E:\tarumai2\300.0_0.0_100.0_10.0\tmp.0011.SUM", ("Y"))
+    # plot_results(r"E:\tarumai2\300.0_0.0_100.0_10.0\tmp.0065.SUM", ("Y"))
+    #plt_warning_tstep(r"E:\tarumai2\300.0_0.0_100.0_10000.0")
     
     # kill(16116, 15)
 
@@ -433,12 +460,17 @@ if __name__ == "__main__":
     # plt.show()
 
     
-    # dirpth = Path(r"E:\tarumai6\200.0_0.0_100.0_10000.0")
-    # figdir = dirpth.joinpath("TIMESTEP")
-    # for i in range(10, 1000, 20):
-    #     fn = str(i).zfill(4)
-    #     fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
-    #     plot_sum(fpth, "COMP1T", figdir.joinpath(fn), True, "Y", True, (21,))
+    dirpth = Path(r"E:\tarumai2\300.0_0.0_100.0_10.0")
+    figdir = dirpth.joinpath("TIMESTEP")
+    for i in range(0, 1000):
+        fn = str(i).zfill(4)
+        fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+        plot_sum(fpth, "PRES", figdir.joinpath(fn), True, "Y", True, (17,))
 
     # optimize_tstep(r"E:\tarumai2")
+    
+    # cache_topo = Path.cwd().joinpath("cache")
+    # with open(cache_topo.joinpath("topo_ls"), "rb") as pkf:
+    #     topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = pickle.load(pkf)
+    # print(calc_m(6, 2, 0, 40, 40))
     pass
