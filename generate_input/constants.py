@@ -276,7 +276,7 @@ NDTFIRST = 100
 NDTEND = 100
 TMULT = 1.05
 
-OUTDIR = r"E:\tarumai3"
+OUTDIR = r"E:\tarumai5"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

@@ -503,11 +503,10 @@ def generamte_rocknum_and_props(
 
     # bottom boundary
     bottom_props: Dict = {}
+    sumgz = sum(gz)
     for j in range(ny):
         for i in range(nx):
-            if i not in (0, nx) and j not in (0, ny):
-                continue
-            # depth from earth surface (m)
+            # depth of air block
             dz = 0.0
             for k in range(nz):
                 m = calc_m(i, j, k, nx, ny)
@@ -515,12 +514,14 @@ def generamte_rocknum_and_props(
                 if _idx in (IDX_LAND, IDX_VENT):
                     break
                 dz += gz[k]
+            prop: Dict = bottom_props.setdefault((i + 1, j + 1, len(gz)), {})
             prop["FLUXNUM"] = fluxnum
-            prop["TEMPC"] = TEMPE_AIR + dz * T_GRAD_ROCK
-            prop["PRES"] = calc_press_air(top - dz) + dz * P_GRAD_ROCK
+            prop["TEMPC"] = TEMPE_AIR + (sumgz - dz) * T_GRAD_ROCK
+            prop["PRES"] = calc_press_air(top - dz) + (sumgz - dz) * P_GRAD_ROCK
             prop["COMP1T"] = TOPO_CONST_PROPS[IDX_LAND]["COMP1T"]
             fluxnum += 1
 
+    # RAINSRC
     m_airbounds = {}
     for m, _idx in enumerate(topo_ls):
         if _idx == IDX_AIR:
@@ -528,18 +529,18 @@ def generamte_rocknum_and_props(
         i, j, k = calc_ijk(m, nx, ny)
         m_above = calc_m(i, j, k - 1, nx, ny)
         if k == 0:
-            z = gz[0] * 0.5
             m_airbounds.setdefault(m, {"FLUXNUM": fluxnum,
                                        "TEMPC": TEMPE_AIR,
-                                       "PRES": calc_press_air(top - z),})
+                                       "PRES": calc_press_air(top),})
+            fluxnum += 1
             continue
         if topo_ls[m_above] == IDX_AIR:
-            z = sum(gz[:k]) + gz[k] * 0.5
+            z = sum(gz[:k])
             m_airbounds.setdefault(m, {"FLUXNUM": fluxnum,
                                        "TEMPC": TEMPE_AIR,
                                        "PRES": calc_press_air(top - z),})
+            fluxnum += 1
             continue
-        fluxnum += 1
 
     return (
         rocknum_ls,
@@ -651,10 +652,6 @@ def generate_input(
         __write("HCROCK                                  We enable heat conduction.")
         __write("")  # \n
 
-        # # NOCASC TODO:
-        # __write("NOCASC                                  We disable cascade method.")
-        # __write("")
-
         # GRID
         __write(
             "GRID      ##################### GRID section begins here #######################"
@@ -760,15 +757,14 @@ def generate_input(
                 f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 1  2 /    <- Lateral boundary"
             )
 
-        # bottom boundary
-        for (i, j, k), prop in bottom_bounds.items():
-            if i == srci and j == srcj and k == srck:
-                continue
-            fluxnum = prop["FLUXNUM"]
-            __write(
-                f"   {fluxnum}   {i} {i} {j} {j} {k} {k}  'K+'  5*                   INFTHIN   4* 2  2 /   <- Bottom boundary"
-            )
-
+        # # bottom boundary
+        # for (i, j, k), prop in bottom_bounds.items():
+        #     if i == srci and j == srcj and k == srck:
+        #         continue
+        #     fluxnum = prop["FLUXNUM"]
+        #     __write(
+        #         f"   {fluxnum}   {i} {i} {j} {j} {k} {k}  'K+'  5*                   INFTHIN   4* 2  2 /   <- Bottom boundary"
+        #     )
 
         __write("/")
         __write("")
@@ -985,30 +981,29 @@ def generate_input(
             __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
             __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
 
-        # bottom boundary
-        for _, prop in bottom_bounds.items():
-            FLUXNUM = prop["FLUXNUM"]
-            T = prop["TEMPC"]
-            P = prop["PRES"]
-            COMP1T = prop["COMP1T"]
-            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /")
-            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
-            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+        # # bottom boundary
+        # for _, prop in bottom_bounds.items():
+        #     FLUXNUM = prop["FLUXNUM"]
+        #     T = prop["TEMPC"]
+        #     P = prop["PRES"]
+        #     COMP1T = prop["COMP1T"]
+        #     __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /")
+        #     __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+        #     __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
         
         # AIR-Land boundary (rain source)
-        for m, prop in m_airbounds.items():
-            FLUXNUM = prop["FLUXNUM"]
-            T = prop["TEMPC"]
-            P = prop["PRES"]
-            COMP1T = calc_xco2_rain(P * 1.0e-6, params.XCO2_AIR)
-            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /")
-            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
-            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+        # for m, prop in m_airbounds.items():
+        #     FLUXNUM = prop["FLUXNUM"]
+        #     T = prop["TEMPC"]
+        #     P = prop["PRES"]
+        #     COMP1T = calc_xco2_rain(P * 1.0e6, params.XCO2_AIR)
+        #     __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /")
+        #     __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+        #     __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
 
         __write("/")
         __write("")  # \n
 
-        # TODO: set TEMPC, PRES, and XCO2
         # TEMPC
         __write("TEMPC")
         _str: str = ""
@@ -1120,7 +1115,7 @@ def generate_input(
         if params.VENT_SCALE == 10000.0:
             ts_max = 1.0
         # #!
-        # ts_max = 2.3e-5
+        # ts_max = 1.15e-5 # 1 s
         time_rpt = 0.0
         while years_total < TIME_SS:
             if ts > ts_max:
@@ -1294,4 +1289,9 @@ def generate_from_params(params: PARAMS, pth: PathLike) -> None:
 
 
 if __name__ == "__main__":
+    generate_from_params(PARAMS(temp_src=300.0,
+                                       comp1t=1.0e-4,
+                                       perm_vent=10.0,
+                                       inj_rate=100.0),
+                        Path(getcwd()).joinpath("tmp.RUN"))
     pass

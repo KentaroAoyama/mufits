@@ -442,7 +442,7 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
     
-    # plot_results(r"E:\tarumai2\300.0_0.0_100.0_10.0\tmp.0065.SUM", ("Y"))
+    plot_results(r"E:\tarumai4\300.0_0.0_100.0_10.0\tmp.0006.SUM", ("Y"))
     #plt_warning_tstep(r"E:\tarumai2\300.0_0.0_100.0_10000.0")
     
     # kill(16116, 15)
@@ -460,12 +460,12 @@ if __name__ == "__main__":
     # plt.show()
 
     
-    dirpth = Path(r"E:\tarumai2\300.0_0.0_100.0_10.0")
-    figdir = dirpth.joinpath("TIMESTEP")
-    for i in range(0, 1000):
-        fn = str(i).zfill(4)
-        fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
-        plot_sum(fpth, "PRES", figdir.joinpath(fn), True, "Y", True, (17,))
+    # dirpth = Path(r"E:\tarumai3\300.0_0.0_100.0_10.0")
+    # figdir = dirpth.joinpath("TIMESTEP")
+    # for i in range(0, 1000):
+    #     fn = str(i).zfill(4)
+    #     fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+    #     plot_sum(fpth, "PRES", figdir.joinpath(fn), True, "Y", True, (22,))
 
     # optimize_tstep(r"E:\tarumai2")
     
