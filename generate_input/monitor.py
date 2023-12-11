@@ -433,7 +433,7 @@ def plt_warning_tstep(dirpth: PathLike) -> None:
     fig.savefig(dirpth.joinpath("warning_tstep.png"), dpi=200, bbox_inches="tight")
 
 
-from utils import calc_m
+from utils import calc_m,calc_press_air
 if __name__ == "__main__":
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
     # for i, (_, prop) in enumerate(cellid_props.items()):
@@ -441,11 +441,44 @@ if __name__ == "__main__":
     #         print(prop)
     #     if isnan(prop["PRES"]):
     #         print(i)
-    
-    plot_results(r"E:\tarumai4\300.0_0.0_100.0_10.0\tmp.0006.SUM", ("Y"))
-    #plt_warning_tstep(r"E:\tarumai2\300.0_0.0_100.0_10000.0")
+    plot_results(r"E:\tarumai10\200.0_0.0_100.0_10000.0\tmp.0056.SUM", ("Y"))
+    # plt_warning_tstep(r"E:\tarumai4\200.0_0.0_100.0_10.0\tmp.0014.SUM")
     
     # kill(16116, 15)
+
+    # cache_topo = Path.cwd().joinpath("cache")
+    # with open(cache_topo.joinpath("topo_ls"), "rb") as pkf:
+    #     topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = pickle.load(pkf)
+    # props, _, _ = load_sum(r"E:\tarumai9\200.0_0.0_100.0_10000.0\tmp.0018.SUM")
+    # v_ls = get_v_ls(props, "PRES")
+    # cou = 0
+    # topo3d_ls = np.zeros((40, 40, 25)).tolist()
+    # anom_ls = []
+    # for m, v in enumerate(v_ls[:25*40*40]):
+    #     i, j, k = calc_ijk(m, 40, 40)
+    #     pair = calc_press_air(1041.0 - k * 50.0)
+
+    #     if pair > v:
+    #         print(pair, v)
+    #         anom_ls.append((i, j, k))
+    #         cou += 1
+    
+    #     topo3d_ls[j][i][k] = topo_ls[m]
+    
+    # print(anom_ls)
+
+    # xx, yy = np.meshgrid(np.array(xc_m), np.array(zc_m))
+
+    # for j, ls in enumerate(topo3d_ls):
+    #     fig, ax = plt.subplots()
+    #     ax.pcolormesh(xx, yy, np.array(ls))
+    #     for (ia, ja, ka) in anom_ls:
+    #         if ja == j:
+    #             ax.scatter(xc_m[ia], zc_m[ka])
+    #     fig.savefig(f"./debug/anom/{j}.png", bbox_inches="tight", dpi=200)
+    #     plt.clf()
+    #     plt.close()
+
 
     # props_ls: List = load_props_ls(6102, Path(r"E:\tarumai6\200.0_0.001_1000.0_1000.0"))
     # for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
@@ -472,5 +505,6 @@ if __name__ == "__main__":
     # cache_topo = Path.cwd().joinpath("cache")
     # with open(cache_topo.joinpath("topo_ls"), "rb") as pkf:
     #     topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = pickle.load(pkf)
-    # print(calc_m(6, 2, 0, 40, 40))
+    # print(calc_ijk(4064 - 1, 40, 40))
+    # print(topo_ls[4064 - 1 - 3200])
     pass

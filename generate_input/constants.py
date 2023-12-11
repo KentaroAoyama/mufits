@@ -214,7 +214,7 @@ TOPO_CONST_PROPS = {
         "PORO": 1.0,
         "PERMX": 0.0,
         "PERMY": 0.0,
-        "PERMZ": 1356152.6283925273,
+        "PERMZ": 1.0e9,
         "DENS": 1.293,
         "HC": 1.007,
         "TEMPC": TEMPE_AIR,
@@ -272,11 +272,11 @@ TSTEP_INIT = 1.0e-5
 # Maximum time step (days)
 TSTEP_MAX = 300.0 # not used
 # number of iterations for each TSTEP_MAX
-NDTFIRST = 100
+NDTFIRST = 10
 NDTEND = 100
 TMULT = 1.05
 
-OUTDIR = r"E:\tarumai5"
+OUTDIR = r"E:\tarumai11"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

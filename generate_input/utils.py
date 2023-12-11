@@ -60,10 +60,17 @@ def calc_k_z(z: float) -> float:
     return 10.0 ** (-14.0 - 3.2 * log10(z / 1000.0)) / 9.869233 * 1.0e16
 
 def condition_to_dir(
-    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float
+    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float, from_latest: bool = False
 ) -> PathLike:
     base_dir = Path(base_dir)
-    return base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
+    sim_dir = base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
+    if not from_latest:
+        return sim_dir
+    for i in range(1, 1000):
+        sim_dir_tmp = sim_dir.joinpath(f"ITER_{i}")
+        if not sim_dir_tmp.exists():
+            break
+    return sim_dir_tmp
 
 def dir_to_condition(cond_dir: PathLike) -> Tuple[float]:
     conds_str = str(Path(cond_dir).name).split("_")
@@ -306,7 +313,9 @@ if __name__ == "__main__":
     #     ylim = PARAMS_VTK.YLIM
     #     zlim = PARAMS_VTK.ZLIM
     #     plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
-    print(calc_k_z(25.0))
+    # print(calc_k_z(25.0))
     # print(calc_xco2_rain(1.0e5, 3.8e-4))
     # print(calc_ijk(2811, 40, 40))
+    print(mdarcy2si(1.0e9))
+    print(P_GRAD_AIR)
     pass
