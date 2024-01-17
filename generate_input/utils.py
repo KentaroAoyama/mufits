@@ -60,10 +60,13 @@ def calc_k_z(z: float) -> float:
     return 10.0 ** (-14.0 - 3.2 * log10(z / 1000.0)) / 9.869233 * 1.0e16
 
 def condition_to_dir(
-    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float, from_latest: bool = False
+    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float, cap_scale: float = None, from_latest: bool = False,
 ) -> PathLike:
     base_dir = Path(base_dir)
-    sim_dir = base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
+    if cap_scale is None:
+        sim_dir = base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
+    else:
+        sim_dir = base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}_{cap_scale}")
     if not from_latest:
         return sim_dir
     for i in range(1, 1000):
@@ -316,6 +319,6 @@ if __name__ == "__main__":
     # print(calc_k_z(25.0))
     # print(calc_xco2_rain(1.0e5, 3.8e-4))
     # print(calc_ijk(2811, 40, 40))
-    print(mdarcy2si(1.0e9))
-    print(P_GRAD_AIR)
+    # print(mdarcy2si(1.0e9))
+    # print(P_GRAD_AIR)
     pass

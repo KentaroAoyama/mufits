@@ -1,6 +1,9 @@
 from pathlib import Path
 
-ORIGIN = (42.690531, 141.376630, 1041.0)
+# ORIGIN = (42.690531, 141.376630, 1041.0)
+# A火口：315.9, -194.0
+# B火口：-58.6, -143.9
+ORIGIN = (42.690531, 141.376630, 955.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
 
 POS_SINK = {"A": (42.688814, 141.380509, 955.6),
@@ -36,6 +39,8 @@ IDX_SEA = 1
 IDX_LAKE = 2
 IDX_AIR = 3
 IDX_VENT = 4
+IDX_CAP = 5
+IDX_CAPVENT = 6
 
 # PATH
 DEM_PTH = "./dem"
@@ -167,6 +172,8 @@ PERM_HOST = 1.0e-16 / 9.869233 * 1.0e16
 TEMPE_AIR = 10.0 # ℃
 # Grain density (kg/m3)
 DENS_ROCK = 2900.0
+# Water density (kg/m3)
+DENS_WATER = 1.0e3
 TOPO_CONST_PROPS = {
     IDX_LAND: {
         "HCONDCFX": 2.0,
@@ -182,6 +189,32 @@ TOPO_CONST_PROPS = {
         "COMP1T": 3.25e-7,
     },
     IDX_VENT: {
+        "HCONDCFX": 2.0,
+        "HCONDCFY": 2.0,
+        "HCONDCFZ": 2.0,
+        "PORO": POROS,
+        # "PERMX": 1000,
+        # "PERMY": 1000,
+        # "PERMZ": 1000,
+        "DENS": DENS_ROCK,
+        "HC": 1.0,
+        "TEMPC": 20.0,
+        "COMP1T": 3.25e-7,
+    },
+    IDX_CAP: {
+        "HCONDCFX": 2.0,
+        "HCONDCFY": 2.0,
+        "HCONDCFZ": 2.0,
+        "PORO": POROS,
+        # "PERMX": 1000,
+        # "PERMY": 1000,
+        # "PERMZ": 1000,
+        "DENS": DENS_ROCK,
+        "HC": 1.0,
+        "TEMPC": 20.0,
+        "COMP1T": 3.25e-7,
+    },
+    IDX_CAPVENT: {
         "HCONDCFX": 2.0,
         "HCONDCFY": 2.0,
         "HCONDCFZ": 2.0,
@@ -214,7 +247,7 @@ TOPO_CONST_PROPS = {
         "PORO": 1.0,
         "PERMX": 0.0,
         "PERMY": 0.0,
-        "PERMZ": 1.0e9,
+        "PERMZ": 0.0,
         "DENS": 1.293,
         "HC": 1.007,
         "TEMPC": TEMPE_AIR,
@@ -235,9 +268,6 @@ TOPO_CONST_PROPS = {
     },
 }
 
-# Water density (kg/m3)
-DENS_WATER = 1.0e3
-
 # Heat capacity of grain (Stissi et al., 2021; Hikcs et al., 2009 (10.1029/2008JB006198))
 HC_ROCK = 1.0
 
@@ -245,15 +275,16 @@ HC_ROCK = 1.0
 G = 9.80665
 
 # Atmospheric pressure (MPa)
-P_GROUND = 1.013e-1
+P_TOP = 1.013e-1
+P_GROUND = P_TOP + TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * ORIGIN[2] * 1.0e-6
 
 # Henry's constant for CO2 gas to water
 # https://www.eng-book.com/pdfs/879040e33a05a0e5f1cb85580ef77ad1.pdf
-Kh = 0.104e4 * P_GROUND * 1.0e6 # # NOTE: at 10℃, unit: Pa
+Kh = 0.104e4 * 1.013e-1 * 1.0e6  # NOTE: at 10℃, unit: Pa
 
 # Pressure gradient (MPa/m)
-P_GRAD_AIR = 1.293 * G * 1.0e-6
-P_GRAD_SEA = 1.02e3 * G * 1.0e-6
+P_GRAD_AIR = TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * 1.0e-6
+P_GRAD_SEA = TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * 1.0e-6
 P_GRAD_LAKE = DENS_WATER * G * 1.0e-6
 P_GRAD_ROCK = DENS_WATER * G * 1.0e-6
 
@@ -273,10 +304,10 @@ TSTEP_INIT = 1.0e-5
 TSTEP_MAX = 300.0 # not used
 # number of iterations for each TSTEP_MAX
 NDTFIRST = 10
-NDTEND = 100
+NDTEND = 10
 TMULT = 1.05
 
-OUTDIR = r"E:\tarumai11"
+OUTDIR = r"E:\tarumai_tmp"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,
@@ -284,8 +315,4 @@ CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
 CONDS_PID_MAP_NAME = "pid.txt"
 
 if __name__ == "__main__":
-    c = 90.0 / 200 ** (1.0/3.0)
-    qb = (50.0 / c) ** 3.0
-    qe = (40.0 / c) ** 3.0
-    print(qb, qe)
     pass

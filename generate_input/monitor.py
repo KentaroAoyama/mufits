@@ -164,6 +164,7 @@ def load_props_ls(i_start: int, dirpth: PathLike) -> List[Tuple[Dict, Dict, floa
     for i in range(i_start, 100000):
         fn = str(i).zfill(4)
         fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+        print(fpth)
         if not (fpth.exists() and access(fpth, R_OK)):
             break
         if _is_writting(fpth) or not _is_enough_size(fpth):
@@ -219,12 +220,12 @@ def monitor_process(conds_dct: Dict[Tuple, Any]) -> None or int:
                 continue
             i += len(props_ls)
             status["i"] = i
-            is_converged = True
+            _is_converged = True
             for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
                 time_ls, changerate_ls = calc_change_rate(props_ls, metric)
                 # Confirm convergent or not
                 if changerate_ls[-1] > criteria:
-                    is_converged = False
+                    _is_converged = False
                 # extend
                 if cou == 0:
                     _extend(status, "time", time_ls)
@@ -236,7 +237,7 @@ def monitor_process(conds_dct: Dict[Tuple, Any]) -> None or int:
                 # plot
                 plt_conv(status["time"], status[metric], MonitorPth.joinpath(f"{metric}.png"))
 
-            if is_converged:
+            if _is_converged:
                 _str = str(condition_to_dir(OUTDIR, *conds))
                 pid: int = None
                 with open(Path(SimDir).joinpath("tmp").joinpath(CONDS_PID_MAP_NAME), "r") as f:
@@ -255,7 +256,7 @@ def _extend(status: Dict, key: str, new_list: List) -> None:
     _ls.extend(new_list)
 
 def _is_writting(fpth: PathLike) -> bool:
-    if time() - path.getmtime(fpth) < 120.0:
+    if time() - path.getmtime(fpth) < 180.0:
         return True
     else:
         return False
@@ -343,7 +344,7 @@ def plot_results(fpth, axis: Tuple[str]=("X", "Y", "Z")) -> None:
             makedirs(savedir, exist_ok=True)
             plot_sum(fpth, prop_name, savedir, True, ax)
 
-def _is_converged(cond_dir: Path) -> bool:
+def is_converged(cond_dir: Path) -> bool:
     # check if exists .vtu file
     for fpth in cond_dir.glob("**/*"):
         if ".vtu" in str(fpth):
@@ -357,6 +358,17 @@ def _is_converged(cond_dir: Path) -> bool:
         for line in reversed(f.readlines()):
             if "DONE" in line:
                  return True
+    
+    day = 19.0 * 60.0 * 60.0
+    time_ls: List = []
+    for fpth in cond_dir.glob("**/*"):
+        if ".SUM" in str(fpth):
+            time_ls.append(fpth.stat().st_mtime)
+    if len(time_ls) == 0:
+        return False
+    elif max(time_ls) - min(time_ls) > day:
+        return True
+    
     return False
 
 
@@ -432,79 +444,81 @@ def plt_warning_tstep(dirpth: PathLike) -> None:
     ax.set_ylabel("TIMESTEP (in SEC)")
     fig.savefig(dirpth.joinpath("warning_tstep.png"), dpi=200, bbox_inches="tight")
 
+def plt_latests(cond_dir: Path, axes: Tuple[str]=("Y",)) -> None:
+    cond_dir = Path(cond_dir)
+    fpth_ls = []
+    for i in range(10000):
+        fn = str(i).zfill(4)
+        fpth = cond_dir.joinpath(f"tmp.{fn}.SUM")
+        if fpth.exists():
+            fpth_ls.append(fpth)
+    if len(fpth_ls) == 0:
+        return
+    plot_results(cond_dir.joinpath(fpth_ls[-1]), axes)
+
+def check_convergence(dirpth: PathLike, outpth: PathLike = None):
+    dirpth = Path(dirpth)
+    conv_dct: Dict = {}
+    if outpth is None:
+        outpth = dirpth.joinpath("conv.txt")
+    f = open(outpth, "w")
+    for cond_pth in dirpth.iterdir():
+        print(cond_pth)
+        sumpth_ls: List = []
+        cou = 0
+        for i in reversed(list(range(10000))):
+            fn = str(i).zfill(4)
+            fpth = cond_pth.joinpath(f"tmp.{fn}.SUM")
+            if fpth.exists():
+                sumpth_ls.append(fpth)
+                cou += 1
+            if cou == 2:
+                continue
+        if len(sumpth_ls) < 2:
+            print(f"skip: {cond_pth}")
+            continue
+        props_ls = [load_sum(sumpth_ls[1]), load_sum(sumpth_ls[0])]
+        f.write(f"{cond_pth}:\n")
+        for prop_name in CONVERSION_CRITERIA:
+            time_ls, diff_ls =  calc_change_rate(props_ls, prop_name)
+            f.write(f"   {prop_name}: {diff_ls[-1]}\n")
+    f.close()
 
 from utils import calc_m,calc_press_air
+from constants import IDX_AIR, IDX_LAND, IDX_VENT, DXYZ
 if __name__ == "__main__":
+    # check_convergence(r"E:\tarumai4")
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
     # for i, (_, prop) in enumerate(cellid_props.items()):
     #     if i == 0:
     #         print(prop)
     #     if isnan(prop["PRES"]):
     #         print(i)
-    plot_results(r"E:\tarumai10\200.0_0.0_100.0_10000.0\tmp.0056.SUM", ("Y"))
-    # plt_warning_tstep(r"E:\tarumai4\200.0_0.0_100.0_10.0\tmp.0014.SUM")
     
-    # kill(16116, 15)
+    plot_results(r"E:\tarumai_tmp\500.0_0.0_10000.0_10.0_100000.0\tmp.1269.SUM", ("Y")) # ← ここから
+    # plt_warning_tstep(r"E:\tarumai1\200.0_0.0_100.0_10000.0")
+    # target_ls = (
+    #             r"E:\tarumai4\900.0_0.001_1000.0_10.0",
+    #             r"E:\tarumai4\900.0_0.001_1000.0_100.0",
+    #             r"E:\tarumai4\900.0_0.001_1000.0_1000.0",
+    #             r"E:\tarumai4\900.0_0.001_1000.0_10000.0",
+    #             r"E:\tarumai4\900.0_0.001_10000.0_10.0",
+    #             r"E:\tarumai4\900.0_0.001_10000.0_100.0",
+    #             r"E:\tarumai4\900.0_0.001_10000.0_1000.0",
+    #             r"E:\tarumai4\900.0_0.001_10000.0_10000.0",
+    #             r"E:\tarumai4\900.0_0.01_100.0_10.0",
+    #             r"E:\tarumai4\900.0_0.01_100.0_100.0",
+    #             r"E:\tarumai4\900.0_0.01_100.0_1000.0",
+    #             r"E:\tarumai4\900.0_0.01_100.0_10000.0",
+    #             )
+    # for fpth in target_ls:
+    #     print(fpth)
+    #     plt_latests(fpth)
 
-    # cache_topo = Path.cwd().joinpath("cache")
-    # with open(cache_topo.joinpath("topo_ls"), "rb") as pkf:
-    #     topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = pickle.load(pkf)
-    # props, _, _ = load_sum(r"E:\tarumai9\200.0_0.0_100.0_10000.0\tmp.0018.SUM")
-    # v_ls = get_v_ls(props, "PRES")
-    # cou = 0
-    # topo3d_ls = np.zeros((40, 40, 25)).tolist()
-    # anom_ls = []
-    # for m, v in enumerate(v_ls[:25*40*40]):
-    #     i, j, k = calc_ijk(m, 40, 40)
-    #     pair = calc_press_air(1041.0 - k * 50.0)
-
-    #     if pair > v:
-    #         print(pair, v)
-    #         anom_ls.append((i, j, k))
-    #         cou += 1
-    
-    #     topo3d_ls[j][i][k] = topo_ls[m]
-    
-    # print(anom_ls)
-
-    # xx, yy = np.meshgrid(np.array(xc_m), np.array(zc_m))
-
-    # for j, ls in enumerate(topo3d_ls):
-    #     fig, ax = plt.subplots()
-    #     ax.pcolormesh(xx, yy, np.array(ls))
-    #     for (ia, ja, ka) in anom_ls:
-    #         if ja == j:
-    #             ax.scatter(xc_m[ia], zc_m[ka])
-    #     fig.savefig(f"./debug/anom/{j}.png", bbox_inches="tight", dpi=200)
-    #     plt.clf()
-    #     plt.close()
-
-
-    # props_ls: List = load_props_ls(6102, Path(r"E:\tarumai6\200.0_0.001_1000.0_1000.0"))
+    # 900.0_0.01_1000.0_1000.0から
+    # props_ls: List = load_props_ls(0, Path(r"E:\tarumai4\700.0_0.0_10000.0_1000.0"))
     # for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
     #     time_ls, changerate_ls = calc_change_rate(props_ls, metric)
-    #     print(changerate_ls)
-
-    # props_ls = load_props_ls(0, Path(r"E:\tarumai3\200.0_0.0_100.0_10.0"))
-    # time_ls, v_ls = calc_change_rate(props_ls, "TEMPC")
-    # plt.plot(time_ls, v_ls)
-    # plt.xscale("log")
-    # plt.yscale("log")
-    # plt.show()
-
-    
-    # dirpth = Path(r"E:\tarumai3\300.0_0.0_100.0_10.0")
-    # figdir = dirpth.joinpath("TIMESTEP")
-    # for i in range(0, 1000):
-    #     fn = str(i).zfill(4)
-    #     fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
-    #     plot_sum(fpth, "PRES", figdir.joinpath(fn), True, "Y", True, (22,))
-
-    # optimize_tstep(r"E:\tarumai2")
-    
-    # cache_topo = Path.cwd().joinpath("cache")
-    # with open(cache_topo.joinpath("topo_ls"), "rb") as pkf:
-    #     topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = pickle.load(pkf)
-    # print(calc_ijk(4064 - 1, 40, 40))
-    # print(topo_ls[4064 - 1 - 3200])
+    #     plt_conv(time_ls, changerate_ls, rf"E:\tarumai4\700.0_0.0_10000.0_1000.0\tmp\{metric}.png")
+    # kill(23152, 15)
     pass

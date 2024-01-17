@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # coding: utf-8
-# TODO: more precise initial parameter settings (T, P, X)
 """Generate input file for MUFITS (Afanasyev, 2012)
 """
 
@@ -17,6 +16,7 @@ import pandas as pd
 from pyproj import Transformer
 import numpy as np
 from tqdm import tqdm
+from shapely import Polygon, Point
 
 from utils import (
     calc_ijk,
@@ -55,6 +55,8 @@ from constants import (
     IDX_LAKE,
     IDX_AIR,
     IDX_VENT,
+    IDX_CAP,
+    IDX_CAPVENT,
     CACHE_DIR,
     CACHE_DEM_FILENAME,
     CACHE_SEA_FILENAME,
@@ -64,6 +66,8 @@ from constants import (
     P_GROUND,
     P_GRAD_AIR,
     P_GRAD_ROCK,
+    P_GRAD_LAKE,
+    P_GRAD_SEA,
     T_GRAD_ROCK,
     TIME_SS,
     TSTEP_INIT,
@@ -163,6 +167,23 @@ def generate_simple_vent(
         topo_arr = np.where(filt, IDX_VENT, topo_arr)
     return topo_arr.tolist()
 
+def generate_simple_cap(topo_ls: List, xc_m: List, yc_m: List, elv_cap: float, cap_bounds: Polygon,) -> List:
+    zc_ls = stack_from_0(DXYZ[2])
+    zc_arr = ORIGIN[2] - np.array(zc_ls)
+    k = np.argmin(np.square(zc_arr - elv_cap))
+    transformer_wgs = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
+    x0, y0 = transformer_wgs.transform(ORIGIN[1], ORIGIN[0])
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
+    for i in range(nx):
+        for j in range(ny):
+            m = calc_m(i, j, k, nx, ny)
+            xtmp = xc_m[m] + x0
+            ytmp = yc_m[m] + y0
+            if cap_bounds.contains(Point(xtmp, ytmp)):
+                topo_ls[m] = IDX_CAP
+                if topo_ls[calc_m(i, j, k-1, nx, ny)] == IDX_VENT and k > 0:
+                    topo_ls[m] = IDX_CAPVENT
+    return topo_ls
 
 def generate_topo(
     pth_dem: PathLike,
@@ -367,7 +388,7 @@ def generate_topo(
         ksink = None
         for k in range(nz):
             m = calc_m(isink, jsink, k, nx, ny)
-            if topo_ls[m] in (IDX_LAND, IDX_VENT):
+            if topo_ls[m] in (IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT):
                 ksink = k
                 break
         pos_sink_ijk.setdefault(name, (isink, jsink, ksink))
@@ -395,6 +416,7 @@ def generamte_rocknum_and_props(
     gz: List,
     topo_props: Dict,
     vent_scale: float,
+    cap_scale: float,
 ) -> Tuple[List, Dict, Dict, Dict, Dict]:
     nx, ny, nz = nxyz
     topo_unique = []
@@ -419,7 +441,7 @@ def generamte_rocknum_and_props(
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
                 # depth from earth surface (m)
-                if _idx not in (IDX_LAND, IDX_VENT):
+                if _idx not in (IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT):
                     permx_ls[m] = topo_props[_idx]["PERMX"]
                     permy_ls[m] = topo_props[_idx]["PERMY"]
                     permz_ls[m] = topo_props[_idx]["PERMZ"]
@@ -427,6 +449,18 @@ def generamte_rocknum_and_props(
                 z += gz[k] * 0.5
                 if _idx == IDX_VENT:
                     v = vent_scale * calc_k_z(z)
+                    if mdarcy2si(v) > 1.0e-7:
+                        v = si2mdarcy(1.0e-7)
+                    permx_ls[m] = v
+                    permy_ls[m] = v
+                    permz_ls[m] = v
+                elif _idx == IDX_CAP:
+                    v = si2mdarcy(1.0e-17)
+                    permx_ls[m] = v
+                    permy_ls[m] = v
+                    permz_ls[m] = v
+                elif _idx == IDX_CAPVENT:
+                    v = si2mdarcy(1.0e-17 * cap_scale)
                     if mdarcy2si(v) > 1.0e-7:
                         v = si2mdarcy(1.0e-7)
                     permx_ls[m] = v
@@ -440,6 +474,36 @@ def generamte_rocknum_and_props(
                     permy_ls[m] = v
                     permz_ls[m] = v
                 z += gz[k] * 0.5
+    
+    rocknum_ptgrad = {}
+    for _idx in topo_unique:
+        _prop = rocknum_ptgrad.setdefault(topo_rocknum_map[_idx], {})
+        if _idx == IDX_AIR:
+            _prop["a_p"] = P_GROUND - top * P_GRAD_AIR
+            _prop["b_p"] = P_GRAD_AIR
+            _prop["a_t"] = topo_props[IDX_AIR]["TEMPC"]
+            _prop["b_t"] = 0.0
+        elif _idx == IDX_LAKE:
+            elv_lake: float = None
+            for m, _idx_tmp in enumerate(topo_ls):
+                if _idx_tmp == IDX_LAKE:
+                    _, _, k = calc_ijk(m, nx, ny)
+                    elv_lake = top - sum(gz[: k + 1])
+                    break
+            _prop["a_p"] = P_GROUND - elv_lake * P_GRAD_AIR
+            _prop["b_p"] = P_GRAD_LAKE
+            _prop["a_t"] = topo_props[IDX_LAKE]["TEMPC"]
+            _prop["b_t"] = 0.0
+        elif _idx == IDX_SEA:
+            _prop["a_p"] = P_GROUND
+            _prop["b_p"] = P_GRAD_SEA
+            _prop["a_t"] = topo_props[IDX_SEA]["TEMPC"]
+            _prop["b_t"] = 0.0
+        else:
+            _prop["a_p"] = P_GROUND
+            _prop["b_p"] = P_GRAD_ROCK
+            _prop["a_t"] = topo_props[IDX_LAND]["TEMPC"]
+            _prop["b_t"] = T_GRAD_ROCK
 
     # T
     tempe_ls, pres_ls, xco2_ls = deepcopy(zeros), deepcopy(zeros), deepcopy(zeros)
@@ -450,7 +514,7 @@ def generamte_rocknum_and_props(
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
                 # depth from earth surface (m)
-                if _idx not in (IDX_LAND, IDX_VENT):
+                if _idx not in (IDX_LAND, IDX_VENT, IDX_CAP):
                     tempe_ls[m] = topo_props[_idx]["TEMPC"]
                     continue
                 z += gz[k] * 0.5
@@ -459,12 +523,12 @@ def generamte_rocknum_and_props(
     # P
     for j in range(ny):
         for i in range(nx):
-            p_top = P_GROUND - P_GRAD_AIR * top
+            p_top = calc_press_air(top)
             for k in range(nz):
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
                 rho = None
-                if _idx in (IDX_LAND, IDX_VENT):
+                if _idx in (IDX_LAND, IDX_VENT, IDX_CAP):
                     rho = 1000.0
                 else:
                     rho = TOPO_CONST_PROPS[_idx]["DENS"]
@@ -495,7 +559,7 @@ def generamte_rocknum_and_props(
             for k in range(nz):
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
-                if _idx not in (IDX_LAND, IDX_VENT):
+                if _idx not in (IDX_LAND, IDX_VENT, IDX_CAP):
                     elvsurf -= gz[k]
                     continue
                 z += gz[k] * 0.5
@@ -507,29 +571,30 @@ def generamte_rocknum_and_props(
                 z += gz[k] * 0.5
                 fluxnum += 1
 
-    # bottom boundary NOT USED
+    # bottom boundary
     bottom_props: Dict = {}
-    sumgz = sum(gz)
     for j in range(ny):
         for i in range(nx):
             # depth of air block
             dz = 0.0
+            elv = top
             for k in range(nz):
                 m = calc_m(i, j, k, nx, ny)
                 _idx = topo_ls[m]
-                if _idx in (IDX_LAND, IDX_VENT):
-                    break
-                dz += gz[k]
+                if _idx in (IDX_LAND, IDX_VENT, IDX_CAP):
+                    dz += gz[k]
+                elif _idx == IDX_AIR:
+                    elv -= gz[k]
             prop: Dict = bottom_props.setdefault((i + 1, j + 1, len(gz)), {})
             prop["FLUXNUM"] = fluxnum
-            prop["TEMPC"] = TEMPE_AIR + (sumgz - dz) * T_GRAD_ROCK
-            # prop["PRES"] = calc_press_air(top - dz) + (sumgz - dz) * P_GRAD_ROCK
-            prop["PRES"] = P_GROUND + (sumgz - dz) * P_GRAD_ROCK
+            prop["TEMPC"] = TEMPE_AIR + dz * T_GRAD_ROCK
+            prop["PRES"] = calc_press_air(elv) + dz * P_GRAD_ROCK
             prop["COMP1T"] = TOPO_CONST_PROPS[IDX_LAND]["COMP1T"]
             fluxnum += 1
 
     # RAINSRC
     m_airbounds = {}
+    pres_top = calc_press_air(top)
     for m, _idx in enumerate(topo_ls):
         if _idx == IDX_AIR:
             continue
@@ -538,7 +603,7 @@ def generamte_rocknum_and_props(
         if k == 0:
             m_airbounds.setdefault(m, {"FLUXNUM": fluxnum,
                                        "TEMPC": TEMPE_AIR,
-                                       "PRES": calc_press_air(top),
+                                       "PRES": pres_top,
                                        })
             fluxnum += 1
             continue
@@ -546,11 +611,12 @@ def generamte_rocknum_and_props(
             z = sum(gz[:k])
             m_airbounds.setdefault(m, {"FLUXNUM": fluxnum,
                                        "TEMPC": TEMPE_AIR,
-                                       "PRES": calc_press_air(top - z),
+                                       "PRES": pres_top + TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * z * 1.0e-6,
                                        })
             fluxnum += 1
             continue
 
+    # Lateral surface
     surf_lateral: Dict = {}
     for m in m_airbounds:
         i, j, k = calc_ijk(m, nx, ny)
@@ -581,22 +647,38 @@ def generamte_rocknum_and_props(
                     if xco2 is None:
                         xco2 = calc_xco2_rain(pres_ls[mtmp] * 1.0e6, 3.8e-4) # TODO: XCO2 should be loaded from constants.py
                     props.setdefault("prop", {"PRES": pres_ls[mtmp],
-                                                "TEMPC": tempe_ls[mtmp],
-                                                "COMP1T": xco2})
+                                              "TEMPC": tempe_ls[mtmp],
+                                              "COMP1T": xco2})
                     props.setdefault("FLUXNUM", fluxnum)
                     if not_inc:
                         fluxnum += 1
                         not_inc = False
 
+    # TOP boudnary
+    top_props: Dict = {}
+    pres_top = calc_press_air(top)
+    for i in range(nx):
+        for j in range(ny):
+            k = 0
+            m = calc_m(i, j, k, nx, ny)
+            prop = {"FLUXNUM": fluxnum,
+                    "PRES": pres_top,
+                    "TEMPC": TEMPE_AIR,
+                    "COMP1T": calc_xco2_rain(pres_top*1.0e6, 3.8e-4)} # TODO: load from constant
+            top_props.setdefault(m, prop)
+            fluxnum += 1
+
     return (
         rocknum_ls,
         (permx_ls, permy_ls, permz_ls),
         rocknum_params,
+        rocknum_ptgrad,
         tempe_ls,
         pres_ls,
         xco2_ls,
         lateral_props,
         bottom_props,
+        top_props,
         m_airbounds,
         surf_lateral,
     )
@@ -665,6 +747,8 @@ def generate_input(
     rocknum_params: Dict,
     lateral_bounds: Dict,
     bottom_bounds: Dict,
+    top_bounds: Dict,
+    rocknum_pt_grad: Dict,
     tempe_ls: List,
     pres_ls: List,
     xco2_ls: List,
@@ -783,6 +867,18 @@ def generate_input(
             f"   100   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
         )
 
+        # Top boundary
+        for m, prop in top_bounds.items():
+            i, j, k = calc_ijk(m, nx, ny)
+            i += 1
+            j += 1
+            k += 1
+            fluxnum = prop["FLUXNUM"]
+            __write(
+            f"   {fluxnum}   {i} {i} {j} {j} {k} {k} 'K-'  5*                   INFTHIN   4* 1  2 /    <- Top boundary"
+        )
+
+
         # lateral boundary block locations
         for (i, j, k), prop in lateral_bounds.items():
             Ip, Im, Jp, Jm = None, None, None, None
@@ -806,54 +902,54 @@ def generate_input(
                 f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 1  2 /    <- Lateral boundary"
             )
 
-        # Top boundary
-        for m, prop in m_airbounds.items():
-            i, j, k = calc_ijk(m, nx, ny)
-            i += 1
-            j += 1
-            k += 1
-            fluxnum = prop["FLUXNUM"]
-            __write(
-            f"   {fluxnum}   {i} {i} {j} {j} {k} {k} 'K-'  5*                   INFTHIN   4* 1  2 /    <- Top boundary"
-        )
-            
-        # Surface surrounded by air
-        for m, props in surf_lateral.items():
-            i, j, k = calc_ijk(m, nx, ny)
-            i += 1
-            j += 1
-            k += 1
-            fluxnum = props["FLUXNUM"]
-            directions = props["Direction"]
-            Ip, Im, Jp, Jm = None, None, None, None
-            if "I-" in directions:
-                Ip = "'" + "I-" + "'"
-            if "I+" in directions:
-                Im = "'" + "I+" + "'"
-            if "J-" in directions:
-                Jp = "'" + "J-" + "'"
-            if "J+" in directions:
-                Jm = "'" + "J+" + "'"
-            dsum = ""
-            cou_none = 2
-            for _d in (Ip, Im, Jp, Jm):
-                if _d is None:
-                    cou_none += 1
-                else:
-                    dsum += _d + " "
-            __write(
-                f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 2  2 /    <- Lateral surface boundary"
-            )
-
-
-        # # bottom boundary
-        # for (i, j, k), prop in bottom_bounds.items():
-        #     if i == srci and j == srcj and k == srck:
-        #         continue
+        # # Surafce boundary
+        # for m, prop in m_airbounds.items():
+        #     i, j, k = calc_ijk(m, nx, ny)
+        #     i += 1
+        #     j += 1
+        #     k += 1
         #     fluxnum = prop["FLUXNUM"]
         #     __write(
-        #         f"   {fluxnum}   {i} {i} {j} {j} {k} {k}  'K+'  5*                   INFTHIN   4* 2  2 /   <- Bottom boundary"
+        #     f"   {fluxnum}   {i} {i} {j} {j} {k} {k} 'K-'  5*                   INFTHIN   4* 1  2 /    <- Surface boundary (top)"
+        # )
+
+        # # Surface surrounded by air
+        # for m, props in surf_lateral.items():
+        #     i, j, k = calc_ijk(m, nx, ny)
+        #     i += 1
+        #     j += 1
+        #     k += 1
+        #     fluxnum = props["FLUXNUM"]
+        #     directions = props["Direction"]
+        #     Ip, Im, Jp, Jm = None, None, None, None
+        #     if "I-" in directions:
+        #         Ip = "'" + "I-" + "'"
+        #     if "I+" in directions:
+        #         Im = "'" + "I+" + "'"
+        #     if "J-" in directions:
+        #         Jp = "'" + "J-" + "'"
+        #     if "J+" in directions:
+        #         Jm = "'" + "J+" + "'"
+        #     dsum = ""
+        #     cou_none = 2
+        #     for _d in (Ip, Im, Jp, Jm):
+        #         if _d is None:
+        #             cou_none += 1
+        #         else:
+        #             dsum += _d + " "
+        #     __write(
+        #         f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 2  2 /    <- Surface boundary (lateral)"
         #     )
+
+
+        # bottom boundary
+        for (i, j, k), prop in bottom_bounds.items():
+            if i == srci and j == srcj and k == srck:
+                continue
+            fluxnum = prop["FLUXNUM"]
+            __write(
+                f"   {fluxnum}   {i} {i} {j} {j} {k} {k}  'K+'  5*                   INFTHIN   4* 2  2 /   <- Bottom boundary"
+            )
 
         __write("/")
         __write("")
@@ -1060,6 +1156,17 @@ def generate_input(
         __write(
             f"TEMPC   {params.SRC_TEMP} FLUXNUM 100 /     The temperature of the MAGMASRC"
         )
+
+        # Top boundary conditions
+        for _, prop in top_bounds.items():
+            FLUXNUM = prop["FLUXNUM"]
+            T = prop["TEMPC"]
+            P = prop["PRES"]
+            COMP1T = prop["COMP1T"]
+            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Top boundary")
+            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+
         # lateral boundary conditions
         for _, prop in lateral_bounds.items():
             FLUXNUM = prop["FLUXNUM"]
@@ -1067,73 +1174,86 @@ def generate_input(
             P = prop["PRES"]
             COMP1T = prop["COMP1T"]
             __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Lateral boundary")
-            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /    <-Lateral boundary")
-            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /    <-Lateral boundary")
+            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
 
-        # # bottom boundary
-        # for _, prop in bottom_bounds.items():
-        #     FLUXNUM = prop["FLUXNUM"]
-        #     T = prop["TEMPC"]
-        #     P = prop["PRES"]
-        #     COMP1T = prop["COMP1T"]
-        #     __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /")
-        #     __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
-        #     __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
-        
-        # AIR-Land boundary (top)
-        for m, prop in m_airbounds.items():
+        # bottom boundary
+        for _, prop in bottom_bounds.items():
             FLUXNUM = prop["FLUXNUM"]
             T = prop["TEMPC"]
             P = prop["PRES"]
-            COMP1T = calc_xco2_rain(P * 1.0e6, params.XCO2_AIR)
-            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <-Top boundary (on top)")
-            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
-            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
-
-        # AIR-Land boundary (lateral)
-        for m, props in surf_lateral.items():
-            FLUXNUM = props["FLUXNUM"]
-            prop = props["prop"]
-            T = prop["TEMPC"]
-            P = prop["PRES"]
             COMP1T = prop["COMP1T"]
-            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <-Top boundary (on lateral)")
+            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Bottom boundary")
             __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
             __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+        
+        # # AIR-Land boundary (top)
+        # for m, prop in m_airbounds.items():
+        #     FLUXNUM = prop["FLUXNUM"]
+        #     T = prop["TEMPC"]
+        #     P = prop["PRES"] #!
+        #     # P = 0.1 #!
+        #     COMP1T = calc_xco2_rain(P * 1.0e6, params.XCO2_AIR)
+        #     __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Surface boundary (top)")
+        #     __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+        #     __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+
+        # # AIR-Land boundary (lateral)
+        # for m, props in surf_lateral.items():
+        #     FLUXNUM = props["FLUXNUM"]
+        #     prop = props["prop"]
+        #     T = prop["TEMPC"]
+        #     P = prop["PRES"] #!
+        #     # P = 0.1 #!
+        #     COMP1T = prop["COMP1T"]
+        #     __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Surface boundary (on lateral)")
+        #     __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+        #     __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
 
         __write("/")
         __write("")  # \n
 
-        # TEMPC
-        __write("TEMPC")
-        _str: str = ""
-        for _v in tempe_ls:
-            _str += str(_v) + "  "
-        _str += "  /"
-        __write(_str)
+        
+        # OPERAREG (set initial value)
+        __write("OPERAREG")
+        for rocknum, prop in rocknum_pt_grad.items():
+            ap, bp = prop["a_p"], prop["b_p"]
+            __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {ap}  {bp}  /")
+            at, bt = prop["a_t"], prop["b_t"]
+            __write(f"   TEMPC DEPTH  ROCKNUM  {rocknum} MULTA  {at}  {bt}  /")
+        __write("/")
         __write("")  # \n
 
-        # PRES
-        __write("PRES")
-        _str: str = ""
-        for _v in pres_ls:
-            _str += str(_v) + "  "
-        _str += "  /"
-        __write(_str)
-        __write("")  # \n
+        # # TEMPC
+        # __write("TEMPC")
+        # _str: str = ""
+        # for _v in tempe_ls:
+        #     _str += str(_v) + "  "
+        # _str += "  /"
+        # __write(_str)
+        # __write("")  # \n
 
-        # TEMPC
-        __write("COMP1T")
-        _str: str = ""
-        for _v in xco2_ls:
-            _str += str(_v) + "  "
-        _str += "  /"
-        __write(_str)
-        __write("")  # \n
+        # # PRES
+        # __write("PRES")
+        # _str: str = ""
+        # for _v in pres_ls:
+        #     _str += str(_v) + "  "
+        # _str += "  /"
+        # __write(_str)
+        # __write("")  # \n
+
+        # # COMP1T
+        # __write("COMP1T")
+        # _str: str = ""
+        # for _v in xco2_ls:
+        #     _str += str(_v) + "  "
+        # _str += "  /"
+        # __write(_str)
+        # __write("")  # \n
 
         # OPERAREG (set initial value)
         # __write("OPERAREG")
-        # for rocknum, prop in rocknum_pres_grad.items():
+        # for rocknum, prop in rocknum_pt_grad.items():
         #     ap, bp = prop["a_p"], prop["b_p"]
         #     __write(f"   PRES DEPTH  ROCKNUM  {rocknum} MULTA  {ap}  {bp}  /")
         #     at, bt = prop["a_t"], prop["b_t"]
@@ -1157,7 +1277,7 @@ def generate_input(
             ptol = prop["PRES"] * 1.0e6
             xco2_rain = calc_xco2_rain(ptol, params.XCO2_AIR)
             __write(f"  PRES {ptol * 1.0e-6} ’{idx}’ /")
-            # __write(f"  PRES {10.0} ’{idx}’ /") # upper limit
+            # __write(f"  PRES {1.0} ’{idx}’ /") # upper limit
             __write(f"  TEMPC {params.TEMP_RAIN} ’{idx}’ /")
             __write(f"  COMP1T {xco2_rain} ’{idx}’ /")
         __write("/")
@@ -1187,9 +1307,9 @@ def generate_input(
         __write("")
 
         # NEWTON
-        __write("NEWTON")
-        __write("1   4   4 /")
-        __write("")
+        # __write("NEWTON")
+        # __write("1   3   3 /")
+        # __write("")
 
         # SRCINJE
         __write("SRCINJE")
@@ -1214,12 +1334,13 @@ def generate_input(
             ts_max = 2.0
         if params.VENT_SCALE == 10000.0:
             ts_max = 1.0
-        #!
-        # ts_max = 1.15e-5 # 1 s
+        # ts_max = 0.0009259 # 80 s
         if tuning_params is not None: #!
             ts_max = tuning_params.get((params.SRC_TEMP, params.SRC_COMP1T,  params.INJ_RATE, params.VENT_SCALE), None)
+            ts = ts_max
             if ts_max is None:
-                ts_max = 1.15e-5
+                ts_max = 0.0009259
+                ts = ts_max
         time_rpt = 0.0
         while years_total < TIME_SS:
             if ts > ts_max:
@@ -1231,7 +1352,7 @@ def generate_input(
                 tstep_rpt = (TIME_SS - years_total) * 365.25
             time_rpt += tstep_rpt
             # time_rpt += tstep_rpt * max(log10(params.VENT_SCALE), log10(params.INJ_RATE)) #!
-            tsmax, tsmin = ts, TSTEP_MIN
+            tsmax = ts
             __write("TUNING")
             __write(f"    1* {tsmax}   1* {TSTEP_MIN} /")
             __write("TIME")
@@ -1252,7 +1373,7 @@ def generate_input(
 
         # VARS
         __write("VARS")
-        __write("PRES     DMAX    1   / Maximum pressure change is set to be 1 MPa")
+        __write("PRES     DMAX    1.0   / Maximum pressure change is set to be 1.0 MPa")
         __write("/")
         __write("")
 
@@ -1288,7 +1409,7 @@ def generate_input(
         )
 
 
-def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool = False) -> None:
+def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool = False,) -> None:
     """Generate RUN file for single condition
 
     Args:
@@ -1330,7 +1451,10 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
     with open("./analyze_magnetic_coords/elv_bounds_mufits.pkl", "rb") as pkf:
         elv_bounds_mufits: Dict = pickle.load(pkf)
     topo_ls = generate_simple_vent(topo_ls, xc_m, yc_m, zc_m, elv_bounds_mufits)
-
+    if params.CAP_SCALE is not None:
+        with open("./analyse_crator_coords/crator.pkl", "rb") as pkf:
+            crator_coords: Polygon = pickle.load(pkf)
+        generate_simple_cap(topo_ls, xc_m, yc_m, 700.0, crator_coords)
     # debug
     # plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
 
@@ -1339,11 +1463,13 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         rocknum_ls,
         perm_ls,
         rocknum_params,
+        rocknum_ptgrad,
         tempe_ls,
         pres_ls,
         xco2_ls,
         lateral_bounds,
         bottom_bounds,
+        top_props,
         m_airbounds,
         surf_lateral,
     ) = generamte_rocknum_and_props(
@@ -1353,6 +1479,7 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         DXYZ[2],
         params.TOPO_PROPS,
         params.VENT_SCALE,
+        params.CAP_SCALE
     )
 
     # modify tempe_ls, pres_ls, xco2_ls
@@ -1387,7 +1514,7 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
     # debug
     # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
-    # perm_si_ls = [mdarcy2si(i) for i in perm_ls]
+    # perm_si_ls = [mdarcy2si(i) for i in perm_ls[0]]
     # perm_with_nan = np.where(np.array(perm_si_ls) == 0, np.nan, np.array(perm_si_ls))
     # plt_any_val(np.log10(perm_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
     # relative permeability
@@ -1405,6 +1532,21 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
     if not load_from_latest:
         tuning_params = None
 
+    # debug
+    with open(Path(pth).parent.joinpath("debug.pkl"), "wb") as pkf:
+        pickle.dump((actnum_ls,
+                     rocknum_ls,
+                     perm_ls,
+                     rocknum_params,
+                     lateral_bounds,
+                     bottom_bounds,
+                     rocknum_ptgrad,
+                     tempe_ls,
+                     pres_ls,
+                     xco2_ls,
+                     m_airbounds,
+                     surf_lateral,), pkf)
+
     generate_input(
         DXYZ[0],
         DXYZ[1],
@@ -1415,6 +1557,8 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         rocknum_params,
         lateral_bounds,
         bottom_bounds,
+        top_props,
+        rocknum_ptgrad,
         tempe_ls,
         pres_ls,
         xco2_ls,
@@ -1430,9 +1574,14 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
 
 
 if __name__ == "__main__":
-    generate_from_params(PARAMS(temp_src=300.0,
-                                       comp1t=1.0e-4,
-                                       perm_vent=10.0,
-                                       inj_rate=100.0),
-                        Path(getcwd()).joinpath("tmp.RUN"))
+    # generate_from_params(PARAMS(temp_src=300.0,
+    #                                    comp1t=1.0e-4,
+    #                                    perm_vent=10.0,
+    #                                    inj_rate=100.0),
+    #                     Path(getcwd()).joinpath("tmp.RUN"))
+    transformer_wgs = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
+    x, y = transformer_wgs.transform([141.380509, 141.376630], [42.688814, 42.690531])
+    print(x, y)
+    print(x[1] - x[0])
+    print(y[1] - y[0])
     pass
