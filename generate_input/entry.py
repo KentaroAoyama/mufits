@@ -14,7 +14,7 @@ from generate_input import generate_from_params
 from params import PARAMS, TUNING_PARAMS
 from constants import OUTDIR, CONDS_PID_MAP_NAME
 from monitor import monitor_process, is_converged
-from utils import condition_to_dir
+from utils import condition_to_dir, calc_infiltration
 
 Future = futures.Future
 
@@ -44,12 +44,12 @@ def run_single_condition(
         comp1t=comp1t,
         inj_rate=inj_rate,
         perm_vent=perm_vent,
-        cap_scale=cap_scale
+        cap_scale=cap_scale,
+        rain_unit=calc_infiltration() * 1000.0
     )
 
     runpth = sim_dir.joinpath("tmp.RUN")
     generate_from_params(params, runpth, from_latest)
-
     exepth = cur_dir.joinpath("H64.EXE")
     logpth = sim_dir.joinpath("log.txt")
 
@@ -104,6 +104,7 @@ def search_conditions(max_workers: int = cpu_count() - 5, from_latest: bool = Fa
     pool.shutdown(wait=True)
 
 if __name__ == "__main__":
-    search_conditions(12, False, True)
+    # search_conditions(12, False, True)
     # run_single_condition(200.0, 0.1, 100.0, 1000.0, None, r"E:\tarumai4\200.0_0.1_100.0_1000.0", False)
+    run_single_condition(900.0, 0.1, 10000.0, 10.0, 100000.0, r"E:\tarumai_tmp6\900.0_0.1_10000.0_10.0_100000.0", False)
     pass

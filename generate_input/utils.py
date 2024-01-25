@@ -1,14 +1,16 @@
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from pathlib import Path
 from os import PathLike, makedirs
-from math import log10
+from math import log10, log
+from copy import deepcopy
 
 import numpy as np
+from scipy.integrate import quad
+import pickle
 from matplotlib import pyplot as plt
 import vtk
 
-from constants import DXYZ, P_GROUND, P_GRAD_AIR, Kh
-from params import PARAMS_VTK
+from constants import DXYZ, P_GROUND, P_GRAD_AIR, Kh, DXYZ, RAIN_AMOUNT, EVAP_AMOUNT, RIVERS, MIA, MIB
 
 
 def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
@@ -57,7 +59,33 @@ def calc_k_z(z: float) -> float:
     Returns:
         float: Permeability (mD)
     """
-    return 10.0 ** (-14.0 - 3.2 * log10(z / 1000.0)) / 9.869233 * 1.0e16
+    return 10.0 ** (MIA + MIB * log10(z / 1000.0)) / 9.869233 * 1.0e16
+
+def _kh_i(z: float, A: float, B: float) -> float:
+    return 0.5 * A * B * z ** 2
+
+def calc_kh(z0: float, z1: float) -> float:
+    assert z1 > z0
+    A = 10.0 ** MIA
+    B = 10.0 ** MIB
+    # return (_kh_i(z1, A, B) - _kh_i(z0, A, B)) / (z1 - z0) / 9.869233 * 1.0e16
+    return quad(calc_k_z, z0, z1)[0] / (z1 - z0)
+
+def _kz_inv(z: float) -> float:
+    assert z > 0.0
+    return 1.0 / calc_k_z(z)
+
+def _kv_i(z: float, A: float, B: float) -> float:
+    return log(z) / A * B
+
+def calc_kv(z0: float, z1: float) -> float:
+    assert z1 > z0
+    A = 10.0 ** MIA
+    B = 10.0 ** MIB
+    bottom = (_kv_i(z1, A, B) - _kv_i(z0, A, B)) / (z1 - z0)
+    # return 1.0 / bottom /  9.869233 * 1.0e16
+    return (z1 -  z0) / quad(_kz_inv, z0, z1)[0]
+
 
 def condition_to_dir(
     base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float, cap_scale: float = None, from_latest: bool = False,
@@ -103,6 +131,40 @@ def calc_xco2_rain(ptol: float, xco2_air: float) -> float:
     pco2 = ptol * xco2_air
     return pco2 / Kh
 
+def calc_infiltration(rain_amount: float=None, evap_amount: float=None, rivers: Dict=None) -> float:
+    """Calculate infiltration (precipitation) rate
+
+    Args:
+        rain_amount (float, optional): Total rain fall (m/year). Defaults to None.
+        evap_amount (float, optional): Total evaporation (m/year). Defaults to None.
+        rivers (Dict, optional): River properties. Defaults to None.
+
+    Returns:
+        float: Infiltration rate (m/days)
+    """
+    if rain_amount is None:
+        rain_amount = deepcopy(RAIN_AMOUNT)
+    if evap_amount is None:
+        evap_amount = EVAP_AMOUNT
+    if rivers is None:
+        rivers = deepcopy(RIVERS)
+    days = 365.25
+    area = sum(DXYZ[0]) * sum(DXYZ[1])
+    rain_total = area * rain_amount / days
+    evap_total = area * evap_amount / days
+    
+    with open("./analyse_river/river_inout_areas.pkl", "rb") as pkf:
+        rivers_inout: Dict = pickle.load(pkf)
+
+    rivers_total: float = 0.0
+    for river_name, (rarea, h) in rivers.items():
+        if river_name in rivers_inout:
+            inout = rivers_inout[river_name]
+            in_area, out_area = inout[0], inout[1]
+            rivers_total += h * in_area
+            # print(river_name, (rarea - (in_area + out_area)) / rarea)
+    rivers_total /= days
+    return (rain_total - evap_total - rivers_total) / area
 
 def plt_topo(
     topo_ls: List, latc_ls: List, lngc_ls: List, nxyz: Tuple[int], savedir: PathLike
@@ -124,7 +186,7 @@ def plt_topo(
         plt.clf()
         plt.close()
 
-def plt_any_val(val_ls: List, x_ls: List, y_ls: List, nxyz: Tuple[int], savedir: PathLike, label_name: str, ax="Y") -> None:
+def plt_any_val(val_ls: List, x_ls: List, y_ls: List, nxyz: Tuple[int], savedir: PathLike, label_name: str, ax="Y", _min: float = None, _max: float = None) -> None:
     nx, ny, nz = nxyz
     ax = ax.lower()
     dirpth = Path(savedir)
@@ -146,8 +208,8 @@ def plt_any_val(val_ls: List, x_ls: List, y_ls: List, nxyz: Tuple[int], savedir:
     for i, val2d in enumerate(val_3d):
         fpth = dirpth.joinpath(f"{i}.png")
         fig, ax = plt.subplots()
-        mappable = ax.pcolormesh(grid_x, grid_y, val2d)
-        pp = fig.colorbar(mappable, ax=ax, orientation="vertical")
+        mappable = ax.pcolormesh(grid_x, grid_y, val2d, vmin=_min, vmax=_max)
+        pp = fig.colorbar(mappable, ax=ax, orientation="vertical",)
         pp.set_label(label_name)
         ax.set_aspect("equal")
         fig.savefig(fpth, dpi=200, bbox_inches="tight")
@@ -321,4 +383,11 @@ if __name__ == "__main__":
     # print(calc_ijk(2811, 40, 40))
     # print(mdarcy2si(1.0e9))
     # print(P_GRAD_AIR)
+    print(calc_infiltration() * 365.25 / RAIN_AMOUNT)
+    print(mdarcy2si(1013249.9658281449))
+    # q0 = 500.0 * 500.0 * 3.53 * 1.0e-3
+    # q1 = 10000.0
+    # print(q0)
+    # print((q0 * 10.0 + q1 * 900.0) / (q0 + q1))
+    # print(mdarcy2si(calc_kv(0.1, 1150.0)))
     pass

@@ -31,6 +31,8 @@ from utils import (
     stack_from_center,
     calc_press_air,
     calc_xco2_rain,
+    calc_kh,
+    calc_kv,
 )
 
 from constants import (
@@ -76,7 +78,8 @@ from constants import (
     NDTFIRST,
     NDTEND,
     TMULT,
-    SINK_PARAMS
+    SINK_PARAMS,
+    PERM_MAX
 )
 
 from params import PARAMS, TUNING_PARAMS
@@ -408,6 +411,20 @@ def generate_act_ls(topo_ls: List[int]) -> List[int]:
         actnum_ls.append(actnum)
     return actnum_ls
 
+def fix_perm(v: float) -> float:
+    """ Correct the permeability to a reasonable value.
+
+    Args:
+        v (float): Permeability in mD
+
+    Returns:
+        float: Permeability in mD
+    """
+    if mdarcy2si(v) > PERM_MAX:
+        v = si2mdarcy(PERM_MAX)
+    if v < 0.0:
+        v = si2mdarcy(PERM_MAX)
+    return v
 
 def generamte_rocknum_and_props(
     topo_ls: List[int],
@@ -436,9 +453,12 @@ def generamte_rocknum_and_props(
     permx_ls, permy_ls, permz_ls = deepcopy(zeros), deepcopy(zeros), deepcopy(zeros)
     for j in range(ny):
         for i in range(nx):
-            z = 0.0
+            z0, z1 = 0.0, 0.0
             for k in range(nz):
                 m = calc_m(i, j, k, nx, ny)
+                if z0 == 0.0:
+                    z0 = 1.0
+                z1 = z0 + gz[k]
                 _idx = topo_ls[m]
                 # depth from earth surface (m)
                 if _idx not in (IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT):
@@ -446,34 +466,35 @@ def generamte_rocknum_and_props(
                     permy_ls[m] = topo_props[_idx]["PERMY"]
                     permz_ls[m] = topo_props[_idx]["PERMZ"]
                     continue
-                z += gz[k] * 0.5
+                # z += gz[k] * 0.5
                 if _idx == IDX_VENT:
-                    v = vent_scale * calc_k_z(z)
-                    if mdarcy2si(v) > 1.0e-7:
-                        v = si2mdarcy(1.0e-7)
-                    permx_ls[m] = v
-                    permy_ls[m] = v
-                    permz_ls[m] = v
+                    # kh = fix_perm(vent_scale * calc_k_z(z0, z1))
+                    # kv = fix_perm(vent_scale * calc_kv(z0, z1))
+                    kh = fix_perm(vent_scale * calc_k_z((z0 + z1) * 0.5)) #!
+                    kv = kh #!
+                    permx_ls[m] = kh
+                    permy_ls[m] = kh
+                    permz_ls[m] = kv
                 elif _idx == IDX_CAP:
                     v = si2mdarcy(1.0e-17)
                     permx_ls[m] = v
                     permy_ls[m] = v
                     permz_ls[m] = v
                 elif _idx == IDX_CAPVENT:
-                    v = si2mdarcy(1.0e-17 * cap_scale)
-                    if mdarcy2si(v) > 1.0e-7:
-                        v = si2mdarcy(1.0e-7)
+                    v = fix_perm(si2mdarcy(1.0e-17 * cap_scale))
                     permx_ls[m] = v
                     permy_ls[m] = v
                     permz_ls[m] = v
                 elif _idx == IDX_LAND:
-                    v = calc_k_z(z)
-                    if mdarcy2si(v) > 1.0e-7:
-                        v = si2mdarcy(1.0e-7)
-                    permx_ls[m] = v
-                    permy_ls[m] = v
-                    permz_ls[m] = v
-                z += gz[k] * 0.5
+                    # kh = fix_perm(calc_kh(z0, z1))
+                    # kv = fix_perm(calc_kv(z0, z1))
+                    kh = fix_perm(calc_k_z((z0 + z1) * 0.5)) #!
+                    kv = kh #!
+                    permx_ls[m] = kh
+                    permy_ls[m] = kh
+                    permz_ls[m] = kv
+                # z += gz[k] * 0.5
+                z0 = z1
     
     rocknum_ptgrad = {}
     for _idx in topo_unique:
@@ -667,6 +688,22 @@ def generamte_rocknum_and_props(
                     "COMP1T": calc_xco2_rain(pres_top*1.0e6, 3.8e-4)} # TODO: load from constant
             top_props.setdefault(m, prop)
             fluxnum += 1
+
+    # #! fix permeability #!
+    # for m in m_airbounds:
+    #     i, j, k = calc_ijk(m, nx, ny)
+    #     dz = DXYZ[2][k]
+    #     if dz <= 10.0:
+    #         px, py, pz = 1.0e-4, 1.0e-4
+    #     else:
+    #         porigh = mdarcy2si(fix_perm(calc_kh(10.0, dz)))
+    #         porigv = mdarcy2si(fix_perm(calc_kv(10.0, dz)))
+    #         px = (10.0 * 1.0e-4 + (dz - 10.0) * porigh) / dz
+    #         py = px
+    #         pz = dz / (10.0 / 1.0e-4 + (dz - 10.0) / porigv)
+    #     permx_ls[m] = si2mdarcy(px)
+    #     permy_ls[m] = si2mdarcy(py)
+    #     permz_ls[m] = si2mdarcy(pz)
 
     return (
         rocknum_ls,
@@ -1306,10 +1343,10 @@ def generate_input(
         __write("WEEKTOL")
         __write("")
 
-        # NEWTON
-        # __write("NEWTON")
-        # __write("1   3   3 /")
-        # __write("")
+        # NEWTON #!
+        __write("NEWTON")
+        __write("1   2   2 /") # 1, 3, 3 ?
+        __write("")
 
         # SRCINJE
         __write("SRCINJE")
@@ -1334,6 +1371,7 @@ def generate_input(
             ts_max = 2.0
         if params.VENT_SCALE == 10000.0:
             ts_max = 1.0
+
         # ts_max = 0.0009259 # 80 s
         if tuning_params is not None: #!
             ts_max = tuning_params.get((params.SRC_TEMP, params.SRC_COMP1T,  params.INJ_RATE, params.VENT_SCALE), None)
@@ -1514,11 +1552,18 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
     # debug
     # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
-    # perm_si_ls = [mdarcy2si(i) for i in perm_ls[0]]
-    # perm_with_nan = np.where(np.array(perm_si_ls) == 0, np.nan, np.array(perm_si_ls))
-    # plt_any_val(np.log10(perm_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/perm", r'Log $m^2$')
     # relative permeability
     # sattab = calc_sattab(method="None")
+
+    # permx_ls = [mdarcy2si(i) for i in perm_ls[0]]
+    # permx_with_nan = np.where(np.array(permx_ls) <= 0, np.nan, np.array(permx_ls))
+    # permz_ls = [mdarcy2si(i) for i in perm_ls[2]]
+    # permz_with_nan = np.where(np.array(permz_ls) <= 0, np.nan, np.array(permz_ls))
+    # print(max(permx_ls), max(permz_ls))
+    # plt_any_val(np.log10(permx_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permx2", r'Log $m^2$', _min=-14, _max=-9)
+    # plt_any_val(np.log10(permz_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permz2", r'Log $m^2$',_min=-14, _max=-9)
+    # for px, pv in zip(permx_ls, permz_ls):
+    #     print(px, pv)
 
     src_props = {
         "i": srcpos[0] + 1,
@@ -1574,14 +1619,10 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
 
 
 if __name__ == "__main__":
-    # generate_from_params(PARAMS(temp_src=300.0,
-    #                                    comp1t=1.0e-4,
-    #                                    perm_vent=10.0,
-    #                                    inj_rate=100.0),
-    #                     Path(getcwd()).joinpath("tmp.RUN"))
-    transformer_wgs = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
-    x, y = transformer_wgs.transform([141.380509, 141.376630], [42.688814, 42.690531])
-    print(x, y)
-    print(x[1] - x[0])
-    print(y[1] - y[0])
+    generate_from_params(PARAMS(temp_src=300.0,
+                                comp1t=1.0e-4,
+                                perm_vent=10.0,
+                                inj_rate=100.0,
+                                cap_scale=10000.0),
+                        Path(getcwd()).joinpath("tmp.RUN"))
     pass

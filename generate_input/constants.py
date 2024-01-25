@@ -19,6 +19,21 @@ LAKE_BOUNDS = {
     "Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 255.0)
 }
 
+# rainfall (m / year)
+RAIN_AMOUNT = 1739.033333 * 1.0e-3
+
+# evaporation rate (m /year)
+EVAP_AMOUNT = 435.7482143 * 1.0e-3
+
+# cross sectional area (m2), outflow height (m)
+RIVERS = {"Tomakomai": (25.4 * 1.0e6, 1805.6666 * 1.0e-3),
+          "Koitoi": (8.97 * 1.0e6, 2729.0 * 1.0e-3),
+          "Nishitappu": (24.11* 1.0e6, 1765.0 * 1.0e-3),
+          "Nishitappusawa": (8.65 * 1.0e6, 1166.6666 * 1.0e-3),
+          "Kumanosawa": (13.66 * 1.0e6, 854.0 * 1.0e-3),
+          "Oboppu": (9.79 * 1.0e6, 752.0 * 1.0e-3),
+          "Tarumai": (24.23 * 1.0e6, 1755.6666 * 1.0e-3)}
+
 # CRS of each toporogical data
 CRS_WGS84 = "epsg:4326"
 CRS_DEM = CRS_WGS84
@@ -32,6 +47,12 @@ RES_LAKE = (
     500.0
     * 500.0  # TODO: currently same as sea, but maybe better to re-compile contour data
 )
+
+# parameters of Manning & Ingebritsen (1998)
+MIA = -14.0
+MIB = -3.2
+
+PERM_MAX: float = 1.0e-9
 
 # topology index
 IDX_LAND = 0
@@ -303,11 +324,15 @@ TSTEP_INIT = 1.0e-5
 # Maximum time step (days)
 TSTEP_MAX = 300.0 # not used
 # number of iterations for each TSTEP_MAX
-NDTFIRST = 10
-NDTEND = 10
-TMULT = 1.05
+# 浸透率の異方性を入れる前：
+# NDTFIRST = 10
+# NDTEND = 10
+# TMULT = 1.05
+NDTFIRST = 400
+NDTEND = 400
+TMULT = 7.0
 
-OUTDIR = r"E:\tarumai_tmp"
+OUTDIR = r"E:\tarumai_tmp6"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

@@ -1,6 +1,6 @@
 from copy import deepcopy
 from constants import TOPO_CONST_PROPS, IDX_AIR
-
+from utils import calc_infiltration
 
 class PARAMS:
     def __init__(
@@ -8,7 +8,7 @@ class PARAMS:
         pres_src: float = 50.0,
         temp_src: float = 700.0,
         comp1t: float = 0.005,
-        rain_unit: float = 3.53,
+        rain_unit: float = 3.53, # 3.53 for first approximation
         xco2_air: float = 3.8e-4, # TODO: move to constant
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
         perm_vent: float = 10.0,
@@ -33,6 +33,8 @@ class PARAMS:
         self.SRC_COMP1T = comp1t
 
         # Rain properties
+        if rain_unit is None:
+            rain_unit = calc_infiltration()
         self.RAIN_AMOUNT = rain_unit  # mm/day
         self.XCO2_AIR = xco2_air
         self.TEMP_RAIN = temp_rain

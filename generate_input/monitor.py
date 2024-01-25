@@ -13,11 +13,25 @@ import numpy as np
 from matplotlib import pyplot as plt
 import pickle
 
-from constants import CONVERSION_CRITERIA, DXYZ, CACHE_DIR, IDX_AIR, CONDS_PID_MAP_NAME, OUTDIR
-from utils import calc_ijk, stack_from_center, stack_from_0, condition_to_dir, dir_to_condition
+from constants import (
+    CONVERSION_CRITERIA,
+    DXYZ,
+    CACHE_DIR,
+    IDX_AIR,
+    CONDS_PID_MAP_NAME,
+    OUTDIR,
+)
+from utils import (
+    calc_ijk,
+    stack_from_center,
+    stack_from_0,
+    condition_to_dir,
+    dir_to_condition,
+)
 
-ENCODING = 'windows-1251'
+ENCODING = "windows-1251"
 NX, NY, NZ = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
+
 
 def read_Array(f: BinaryIO) -> Tuple[float, List]:
     props_ls: List = []
@@ -42,9 +56,10 @@ def read_Array(f: BinaryIO) -> Tuple[float, List]:
         tag_ls = []
         while "ENDITEM" not in b.decode(encoding=ENCODING):
             tag_ls.append(b.decode(encoding=ENCODING))
-            b = f.read(8) # ENDITEM
+            b = f.read(8)  # ENDITEM
         props_ls.append((mnemonic, dimension, tag_ls))
     return no, props_ls
+
 
 def read_DATA(f: BinaryIO, no: int, props_ls: List, cellid_props: Dict) -> Dict:
     for _ in range(no):
@@ -93,18 +108,19 @@ def read_DATA(f: BinaryIO, no: int, props_ls: List, cellid_props: Dict) -> Dict:
                 _props.setdefault(prop_name, v)
     # ENDDATA
     b = f.read(8)
-    b = f.read(8) # 0
+    b = f.read(8)  # 0
     return cellid_props
+
 
 def load_sum(fpth: PathLike) -> Tuple[Dict, Dict, float]:
     with open(fpth, "rb") as f:
         cellid_props: Dict = {}
-        srcid_props: Dict = {} # not load for now
+        srcid_props: Dict = {}  # not load for now
         time: float = None
         while f.readable():
             # get the name
             b = f.read(8)
-            name= b.decode(encoding=ENCODING)
+            name = b.decode(encoding=ENCODING)
             if name in "BINARY":
                 f.read(8)
                 continue
@@ -113,7 +129,7 @@ def load_sum(fpth: PathLike) -> Tuple[Dict, Dict, float]:
                 continue
             # Record TIME
             if name == "TIME    ":
-                _ = f.read(8) # 16 (int)
+                _ = f.read(8)  # 16 (int)
                 # time value
                 b = f.read(8)
                 time = struct.unpack("d", b)[0]
@@ -145,6 +161,7 @@ def load_sum(fpth: PathLike) -> Tuple[Dict, Dict, float]:
                 break
     return cellid_props, srcid_props, time
 
+
 def get_v_ls(props: Dict, prop_name: str) -> List[float]:
     v_ls: List[float] = list(range(len(props)))
     for i, (_, prop) in enumerate(props.items()):
@@ -155,9 +172,11 @@ def get_v_ls(props: Dict, prop_name: str) -> List[float]:
         v_ls[i] = v
     return v_ls
 
+
 def calc_prop_diff(props0: Dict, props1: Dict, prop_name: str) -> float:
     v1_ls, v2_ls = get_v_ls(props0, prop_name), get_v_ls(props1, prop_name)
     return np.sqrt(np.square(np.array(v1_ls) - np.array(v2_ls)).sum())
+
 
 def load_props_ls(i_start: int, dirpth: PathLike) -> List[Tuple[Dict, Dict, float]]:
     props_ls: List[Tuple[Dict, Dict, float]] = []
@@ -173,7 +192,10 @@ def load_props_ls(i_start: int, dirpth: PathLike) -> List[Tuple[Dict, Dict, floa
         props_ls.append((cellprops1, srcprops1, time))
     return props_ls
 
-def calc_change_rate(props_ls: List[Tuple[Dict, Dict, float]], prop_name: str) -> Tuple[List, List]:
+
+def calc_change_rate(
+    props_ls: List[Tuple[Dict, Dict, float]], prop_name: str
+) -> Tuple[List, List]:
     time_ls, diff_ls = [], []
     time0: float = None
     cellprops0 = None
@@ -183,10 +205,13 @@ def calc_change_rate(props_ls: List[Tuple[Dict, Dict, float]], prop_name: str) -
             cellprops0 = cellprops1
             continue
         time_ls.append(time)
-        diff_ls.append(calc_prop_diff(cellprops0, cellprops1, prop_name) / (time - time0))
+        diff_ls.append(
+            calc_prop_diff(cellprops0, cellprops1, prop_name) / (time - time0)
+        )
         cellprops0 = cellprops1
         time0 = time
     return time_ls, diff_ls
+
 
 def plt_conv(time_ls, changerate_ls, fpth: PathLike):
     fig, ax = plt.subplots()
@@ -198,6 +223,7 @@ def plt_conv(time_ls, changerate_ls, fpth: PathLike):
     fig.savefig(fpth, bbox_inches="tight", dpi=200)
     plt.clf()
     plt.close()
+
 
 def monitor_process(conds_dct: Dict[Tuple, Any]) -> None or int:
     # i, change_rate
@@ -233,14 +259,18 @@ def monitor_process(conds_dct: Dict[Tuple, Any]) -> None or int:
                     logger.debug(f"TIME: {time_ls[-1]} DAYS")
                 _extend(status, metric, changerate_ls)
                 logger.debug(f"{metric}: {changerate_ls[-1]}")
-                
+
                 # plot
-                plt_conv(status["time"], status[metric], MonitorPth.joinpath(f"{metric}.png"))
+                plt_conv(
+                    status["time"], status[metric], MonitorPth.joinpath(f"{metric}.png")
+                )
 
             if _is_converged:
                 _str = str(condition_to_dir(OUTDIR, *conds))
                 pid: int = None
-                with open(Path(SimDir).joinpath("tmp").joinpath(CONDS_PID_MAP_NAME), "r") as f:
+                with open(
+                    Path(SimDir).joinpath("tmp").joinpath(CONDS_PID_MAP_NAME), "r"
+                ) as f:
                     for line in reversed(f.readlines()):
                         if _str in line:
                             line = line.replace("\n", "")
@@ -251,9 +281,11 @@ def monitor_process(conds_dct: Dict[Tuple, Any]) -> None or int:
                 logger.debug("DONE")
                 print(f"{MonitorPth} DONE")
 
+
 def _extend(status: Dict, key: str, new_list: List) -> None:
     _ls: List = status.setdefault(key, [])
     _ls.extend(new_list)
+
 
 def _is_writting(fpth: PathLike) -> bool:
     if time() - path.getmtime(fpth) < 180.0:
@@ -261,21 +293,31 @@ def _is_writting(fpth: PathLike) -> bool:
     else:
         return False
 
-def _is_enough_size(fpth: PathLike, criteria: int=2000000) -> bool:
+
+def _is_enough_size(fpth: PathLike, criteria: int = 2000000) -> bool:
     if path.getsize(fpth) > criteria:
         return True
     else:
         False
 
-def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=True, axis="Y", show_time: bool=True, indexes: Tuple[int]=None) -> None:
+
+def plot_sum(
+    fpth: PathLike,
+    prop_name: str,
+    savedir: PathLike,
+    use_cache: bool = True,
+    axis="Y",
+    show_time: bool = True,
+    vmin: float = None,
+    vmax: float = None,
+    indexes: Tuple[int] = None,
+) -> None:
     cache_topo = CACHE_DIR.joinpath("topo_ls")
     topo_ls: List[int] = None
     if cache_topo.exists():
         with open(cache_topo, "rb") as pkf:
-            topo_ls, _ = pickle.load(
-                pkf
-            )
-    
+            topo_ls, _ = pickle.load(pkf)
+
     fpth = Path(fpth)
     cachepth = fpth.parent.joinpath(f"{fpth.stem}.pkl")
     # load cellid_props
@@ -286,7 +328,7 @@ def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=
     else:
         cellid_props, _, time = load_sum(fpth)
     v_ls = get_v_ls(cellid_props, prop_name)
-    v_ls = v_ls[:NX * NY * NZ]
+    v_ls = v_ls[: NX * NY * NZ]
 
     # make array
     axis = axis.lower()
@@ -306,16 +348,22 @@ def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=
         val_3d = np.transpose(val_3d, (2, 0, 1))
         val_3d = np.flip(val_3d, 1)
         val_3d = np.flip(val_3d, 2)
-        grid_x, grid_y = np.meshgrid(np.array(stack_from_center(DXYZ[1])), np.array(stack_from_0(DXYZ[2])))
+        grid_x, grid_y = np.meshgrid(
+            np.array(stack_from_center(DXYZ[1])), np.array(stack_from_0(DXYZ[2]))
+        )
     if axis == "y":
         val_3d = np.transpose(val_3d, (1, 0, 2))
         val_3d = np.flip(val_3d, 0)
         val_3d = np.flip(val_3d, 1)
-        grid_x, grid_y = np.meshgrid(np.array(stack_from_center(DXYZ[0])), np.array(stack_from_0(DXYZ[2])))
+        grid_x, grid_y = np.meshgrid(
+            np.array(stack_from_center(DXYZ[0])), np.array(stack_from_0(DXYZ[2]))
+        )
     if axis == "z":
         val_3d = np.flip(val_3d, 0)
         val_3d = np.flip(val_3d, 1)
-        grid_x, grid_y = np.meshgrid(np.array(stack_from_center(DXYZ[0])), np.array(stack_from_center(DXYZ[1])))
+        grid_x, grid_y = np.meshgrid(
+            np.array(stack_from_center(DXYZ[0])), np.array(stack_from_center(DXYZ[1]))
+        )
 
     dirpth = Path(savedir)
     makedirs(dirpth, exist_ok=True)
@@ -325,24 +373,33 @@ def plot_sum(fpth: PathLike, prop_name: str, savedir: PathLike, use_cache: bool=
                 continue
         fpth = dirpth.joinpath(f"{i}.png")
         fig, ax = plt.subplots()
-        mappable = ax.pcolormesh(grid_x, grid_y, val2d)
+        mappable = ax.pcolormesh(grid_x, grid_y, val2d, vmin=vmin, vmax=vmax,)
         pp = fig.colorbar(mappable, ax=ax, orientation="vertical")
         pp.set_label(prop_name)
         ax.set_aspect("equal")
         plt.tick_params(labelsize=8)
         if show_time:
-            ax.set_title('{:.3f}'.format(time))
+            ax.set_title("{:.3f}".format(time))
         fig.savefig(fpth, dpi=200, bbox_inches="tight")
         plt.clf()
         plt.close()
 
-def plot_results(fpth, axis: Tuple[str]=("X", "Y", "Z")) -> None:
+
+def plot_results(
+    fpth,
+    axis: Tuple[str] = ("X", "Y", "Z"),
+    show_time: bool = True,
+    vmin: float = None,
+    vmax: float = None,
+    prop_ls: List[str] = list(CONVERSION_CRITERIA.keys()),
+) -> None:
     fpth = Path(fpth)
-    for prop_name in CONVERSION_CRITERIA:
+    for prop_name in prop_ls:
         for ax in axis:
             savedir = fpth.parent.joinpath(prop_name).joinpath(ax)
             makedirs(savedir, exist_ok=True)
-            plot_sum(fpth, prop_name, savedir, True, ax)
+            plot_sum(fpth, prop_name, savedir, axis=ax, show_time=show_time, vmin=vmin, vmax=vmax)
+
 
 def is_converged(cond_dir: Path) -> bool:
     # check if exists .vtu file
@@ -357,8 +414,8 @@ def is_converged(cond_dir: Path) -> bool:
     with open(logpth, "r") as f:
         for line in reversed(f.readlines()):
             if "DONE" in line:
-                 return True
-    
+                return True
+
     day = 19.0 * 60.0 * 60.0
     time_ls: List = []
     for fpth in cond_dir.glob("**/*"):
@@ -368,7 +425,7 @@ def is_converged(cond_dir: Path) -> bool:
         return False
     elif max(time_ls) - min(time_ls) > day:
         return True
-    
+
     return False
 
 
@@ -389,15 +446,21 @@ def optimize_tstep(sim_dir: PathLike):
             dt_ls = []
             for i, line in enumerate(lines):
                 if "WAR: RECALCULATION" in line:
-                    dtline = lines[i+3]
-                    dt_ls.append(float(re.search(r'\d+.\d+ DAYS', dtline).group().replace(" DAYS", "")))
+                    dtline = lines[i + 3]
+                    dt_ls.append(
+                        float(
+                            re.search(r"\d+.\d+ DAYS", dtline)
+                            .group()
+                            .replace(" DAYS", "")
+                        )
+                    )
             if len(dt_ls) > 0:
                 _ls: List = perm_dt.setdefault(p, [[], []])
                 _ls[0].append(q)
                 _ls[1].append(median(dt_ls))
 
     # fit
-    def _func(p_ls, q_ls, A: float=0.0001, B: float=0.2):
+    def _func(p_ls, q_ls, A: float = 0.0001, B: float = 0.2):
         v = []
         for _p, _q in zip(p_ls, q_ls):
             _max = 50.0 * (exp(-B * (log10(_p) - 1.0)))
@@ -429,11 +492,12 @@ def warning_tstep(dirpth: PathLike) -> List[List]:
         lines = f.readlines()
         for i, line in enumerate(lines):
             if "WAR: RECALCULATION" in line:
-                m = re.search(r'\d+\.\d+ DAYS', lines[i + 2])
+                m = re.search(r"\d+\.\d+ DAYS", lines[i + 2])
                 days.append(float(m.group().replace(" DAYS", "")))
-                m = re.search(r'\d+\.\d+E.\d+ SEC', lines[i + 3])
+                m = re.search(r"\d+\.\d+E.\d+ SEC", lines[i + 3])
                 tsteps.append(float(m.group().replace(" SEC", "")))
     return days, tsteps
+
 
 def plt_warning_tstep(dirpth: PathLike) -> None:
     dirpth = Path(dirpth)
@@ -444,7 +508,15 @@ def plt_warning_tstep(dirpth: PathLike) -> None:
     ax.set_ylabel("TIMESTEP (in SEC)")
     fig.savefig(dirpth.joinpath("warning_tstep.png"), dpi=200, bbox_inches="tight")
 
-def plt_latests(cond_dir: Path, axes: Tuple[str]=("Y",)) -> None:
+
+def plt_latests(
+    cond_dir: Path,
+    axes: Tuple[str] = ("Y",),
+    show_time: bool = True,
+    vmin: float = None,
+    vmax: float = None,
+    prop_ls: List[str] = list(CONVERSION_CRITERIA.keys()),
+) -> None:
     cond_dir = Path(cond_dir)
     fpth_ls = []
     for i in range(10000):
@@ -454,7 +526,15 @@ def plt_latests(cond_dir: Path, axes: Tuple[str]=("Y",)) -> None:
             fpth_ls.append(fpth)
     if len(fpth_ls) == 0:
         return
-    plot_results(cond_dir.joinpath(fpth_ls[-1]), axes)
+    plot_results(
+        cond_dir.joinpath(fpth_ls[-1]),
+        axes,
+        show_time=show_time,
+        vmin=vmin,
+        vmax=vmax,
+        prop_ls=prop_ls,
+    )
+
 
 def check_convergence(dirpth: PathLike, outpth: PathLike = None):
     dirpth = Path(dirpth)
@@ -480,12 +560,35 @@ def check_convergence(dirpth: PathLike, outpth: PathLike = None):
         props_ls = [load_sum(sumpth_ls[1]), load_sum(sumpth_ls[0])]
         f.write(f"{cond_pth}:\n")
         for prop_name in CONVERSION_CRITERIA:
-            time_ls, diff_ls =  calc_change_rate(props_ls, prop_name)
+            time_ls, diff_ls = calc_change_rate(props_ls, prop_name)
             f.write(f"   {prop_name}: {diff_ls[-1]}\n")
     f.close()
 
-from utils import calc_m,calc_press_air
+
+def load_results_and_plt_conv(dirpth: PathLike):
+    dirpth = Path(dirpth)
+    sumpth_ls: List = []
+    for i in range(10000):
+        fn = str(i).zfill(4)
+        fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+        if fpth.exists():
+            sumpth_ls.append(fpth)
+        else:
+            break
+    # load properties
+    props_ls = []
+    for sumpth in sumpth_ls:
+        props_ls.append(load_sum(sumpth))
+    # calc chagne rate
+    props_change_rate_ls: Dict = {}
+    for prop_name in CONVERSION_CRITERIA:
+        time_ls, diff_ls = calc_change_rate(props_ls, prop_name)
+        plt_conv(time_ls, diff_ls, dirpth.joinpath("tmp").joinpath(f"{prop_name}.png"))
+
+
+from utils import calc_m, calc_press_air
 from constants import IDX_AIR, IDX_LAND, IDX_VENT, DXYZ
+
 if __name__ == "__main__":
     # check_convergence(r"E:\tarumai4")
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
@@ -494,26 +597,30 @@ if __name__ == "__main__":
     #         print(prop)
     #     if isnan(prop["PRES"]):
     #         print(i)
-    
-    plot_results(r"E:\tarumai_tmp\500.0_0.0_10000.0_10.0_100000.0\tmp.1269.SUM", ("Y")) # ← ここから
-    # plt_warning_tstep(r"E:\tarumai1\200.0_0.0_100.0_10000.0")
+
+    plot_results(
+        r"E:\tarumai_tmp\900.0_0.1_10000.0_10.0_100000.0\tmp.0305.SUM", ("Y"), True, 10.0, 200.0, ["TEMPC"]
+    )  # ← ここから
+    # plt_warning_tstep(r"E:\tarumai_tmp5\900.0_0.1_10000.0_10.0_1.0")
+
     # target_ls = (
-    #             r"E:\tarumai4\900.0_0.001_1000.0_10.0",
-    #             r"E:\tarumai4\900.0_0.001_1000.0_100.0",
-    #             r"E:\tarumai4\900.0_0.001_1000.0_1000.0",
-    #             r"E:\tarumai4\900.0_0.001_1000.0_10000.0",
-    #             r"E:\tarumai4\900.0_0.001_10000.0_10.0",
-    #             r"E:\tarumai4\900.0_0.001_10000.0_100.0",
-    #             r"E:\tarumai4\900.0_0.001_10000.0_1000.0",
-    #             r"E:\tarumai4\900.0_0.001_10000.0_10000.0",
-    #             r"E:\tarumai4\900.0_0.01_100.0_10.0",
-    #             r"E:\tarumai4\900.0_0.01_100.0_100.0",
-    #             r"E:\tarumai4\900.0_0.01_100.0_1000.0",
-    #             r"E:\tarumai4\900.0_0.01_100.0_10000.0",
-    #             )
-    # for fpth in target_ls:
+    #     r"E:\tarumai4\900.0_0.001_1000.0_10.0",
+    #     r"E:\tarumai4\900.0_0.001_1000.0_100.0",
+    #     r"E:\tarumai4\900.0_0.001_1000.0_1000.0",
+    #     r"E:\tarumai4\900.0_0.001_1000.0_10000.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_10.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_100.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_1000.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_10000.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_10.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_100.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_1000.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_10000.0",
+    # )
+    # target_ls = [i for i in Path(r"E:\tarumai4").iterdir()]
+    # for fpth in reversed(target_ls):
     #     print(fpth)
-    #     plt_latests(fpth)
+    #     plt_latests(fpth, show_time=False, vmin=10.0, vmax=100.0, prop_ls=["TEMPC"])
 
     # 900.0_0.01_1000.0_1000.0から
     # props_ls: List = load_props_ls(0, Path(r"E:\tarumai4\700.0_0.0_10000.0_1000.0"))
@@ -521,4 +628,9 @@ if __name__ == "__main__":
     #     time_ls, changerate_ls = calc_change_rate(props_ls, metric)
     #     plt_conv(time_ls, changerate_ls, rf"E:\tarumai4\700.0_0.0_10000.0_1000.0\tmp\{metric}.png")
     # kill(23152, 15)
+    # print(calc_ijk(2142, 40, 40))
+
+    # load_results_and_plt_conv(r"E:\tarumai_tmp5\900.0_0.1_10000.0_10.0_1.0")
+
+    # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0
     pass
