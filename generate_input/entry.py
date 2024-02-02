@@ -35,6 +35,7 @@ def run_single_condition(
     temp: float, comp1t: float, inj_rate: float, perm_vent: float, cap_scale: float, sim_dir: PathLike, from_latest: bool=False,
 ) -> None:
     sim_dir = Path(sim_dir)
+    makedirs(sim_dir, exist_ok=True)
     if is_converged(sim_dir):
         return None
 
@@ -79,8 +80,10 @@ def search_conditions(max_workers: int = cpu_count() - 5, from_latest: bool = Fa
         for comp1t in sorted(conditions["comp1t"]):
             for inj_rate in sorted(conditions["inj_rate"]):
                 for perm_vent in sorted(conditions["pearm"]):
-                    for cap_scale in sorted(conditions["cap_scale"]):
-                        if not with_cap:
+                    for i, cap_scale in enumerate(sorted(conditions["cap_scale"])):
+                        if not with_cap and i != 0:
+                            continue
+                        elif not with_cap:
                             cap_scale = None
                         if from_latest:
                             if (temp, comp1t, inj_rate, perm_vent) not in TUNING_PARAMS:
@@ -104,7 +107,9 @@ def search_conditions(max_workers: int = cpu_count() - 5, from_latest: bool = Fa
     pool.shutdown(wait=True)
 
 if __name__ == "__main__":
-    # search_conditions(12, False, True)
+    search_conditions(12, False, True)
     # run_single_condition(200.0, 0.1, 100.0, 1000.0, None, r"E:\tarumai4\200.0_0.1_100.0_1000.0", False)
-    run_single_condition(900.0, 0.1, 10000.0, 10.0, 100000.0, r"E:\tarumai_tmp6\900.0_0.1_10000.0_10.0_100000.0", False)
+    # run_single_condition(900.0, 0.1, 10000.0, 10.0, None, r"E:\tarumai_tmp9\900.0_0.1_10000.0_10.0", False)
+    # run_single_condition(900.0, 0.1, 10000.0, 10.0, None, r"E:\tarumai_tmp11\900.0_0.1_10000.0_10.0", False)
+    # run_single_condition(900.0, 0.1, 10000.0, 10000.0, None, r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0", False)
     pass

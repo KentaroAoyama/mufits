@@ -148,6 +148,7 @@ def calc_infiltration(rain_amount: float=None, evap_amount: float=None, rivers: 
         evap_amount = EVAP_AMOUNT
     if rivers is None:
         rivers = deepcopy(RIVERS)
+    # return rain_amount * 0.0 / 365.25 #! set 0
     days = 365.25
     area = sum(DXYZ[0]) * sum(DXYZ[1])
     rain_total = area * rain_amount / days
@@ -383,8 +384,8 @@ if __name__ == "__main__":
     # print(calc_ijk(2811, 40, 40))
     # print(mdarcy2si(1.0e9))
     # print(P_GRAD_AIR)
-    print(calc_infiltration() * 365.25 / RAIN_AMOUNT)
-    print(mdarcy2si(1013249.9658281449))
+    print(calc_infiltration())
+    # print(mdarcy2si(1013249.9658281449))
     # q0 = 500.0 * 500.0 * 3.53 * 1.0e-3
     # q1 = 10000.0
     # print(q0)

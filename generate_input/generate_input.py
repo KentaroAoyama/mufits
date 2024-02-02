@@ -682,6 +682,8 @@ def generamte_rocknum_and_props(
         for j in range(ny):
             k = 0
             m = calc_m(i, j, k, nx, ny)
+            if m not in m_airbounds:
+                continue
             prop = {"FLUXNUM": fluxnum,
                     "PRES": pres_top,
                     "TEMPC": TEMPE_AIR,
@@ -762,10 +764,31 @@ def get_air_bounds(topo_ls, nxyz):
     return m_bounds
 
 
+def generate_imperm_top_bc(m_airbounds: Dict) -> List[Tuple]:
+    transformer = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
+    x0, y0 = transformer.transform(ORIGIN[1], ORIGIN[0])
+    gx, gy, gz = DXYZ
+    xc = np.array(stack_from_center(gx))
+    yc = np.array(stack_from_center(gy))
+    nx, ny = len(xc), len(yc)
+    ijk_ls = []
+    for _, pos in POS_SINK.items():
+        x, y = transformer.transform(pos[1], pos[0])
+        x -= x0
+        y -= y0
+        i = np.argmin(np.square(xc - x))
+        j = np.argmin(np.square(yc - y))
+        for k in range(len(gz)):
+            if calc_m(i, j, k, nx, ny) in m_airbounds:
+                ijk_ls.append((i, j, k))
+                break
+    return ijk_ls
+
+
 # def calc_tstep(perm: float, q: float, A: float=0.0006743836062232225, B: float=0.4737982349312893) -> float:
 def calc_tstep(perm: float, q: float, A: float = 0.0001, B: float = 0.2) -> float:
     # _max = 300.0 * (exp(-B * (log10(perm) - 1.0))) # before fix pressure gradient
-    _max = 50.0 * (exp(-B * (log10(perm) - 1.0)))
+    _max = 25.0 * (exp(-B * (log10(perm) - 1.0)))
     return _max * exp(-A * q)
 
 
@@ -791,6 +814,7 @@ def generate_input(
     xco2_ls: List,
     m_airbounds: Dict,
     surf_lateral: Dict,
+    imperm_bounds: List[Tuple],
     sattab: Tuple,
     src_props: Dict,
     sink_props: Dict,
@@ -904,17 +928,24 @@ def generate_input(
             f"   100   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
         )
 
-        # Top boundary
-        for m, prop in top_bounds.items():
-            i, j, k = calc_ijk(m, nx, ny)
-            i += 1
-            j += 1
-            k += 1
-            fluxnum = prop["FLUXNUM"]
-            __write(
-            f"   {fluxnum}   {i} {i} {j} {j} {k} {k} 'K-'  5*                   INFTHIN   4* 1  2 /    <- Top boundary"
-        )
-
+        # # Top boundary
+        # for m, prop in top_bounds.items():
+        #     i, j, k = calc_ijk(m, nx, ny)
+        #     typenum: int = None
+        #     actnum: int = None
+        #     if (i, j, k) in imperm_bounds:
+        #         typenum = 1
+        #         actnum = 1
+        #     else:
+        #         typenum = 2
+        #         actnum = 2 # TODO: actnum=1にすると計算が回らなくなったのでとりあえずこうしている
+        #     i += 1
+        #     j += 1
+        #     k += 1
+        #     fluxnum = prop["FLUXNUM"]
+        #     __write(
+        #     f"   {fluxnum}   {i} {i} {j} {j} {k} {k} 'K-'  5*                   INFTHIN   4* {typenum}  {actnum} /    <- Top boundary"
+        # )
 
         # lateral boundary block locations
         for (i, j, k), prop in lateral_bounds.items():
@@ -1195,14 +1226,14 @@ def generate_input(
         )
 
         # Top boundary conditions
-        for _, prop in top_bounds.items():
-            FLUXNUM = prop["FLUXNUM"]
-            T = prop["TEMPC"]
-            P = prop["PRES"]
-            COMP1T = prop["COMP1T"]
-            __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Top boundary")
-            __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
-            __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
+        # for _, prop in top_bounds.items():
+        #     FLUXNUM = prop["FLUXNUM"]
+        #     T = prop["TEMPC"]
+        #     P = prop["PRES"]
+        #     COMP1T = prop["COMP1T"]
+        #     __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Top boundary")
+        #     __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
+        #     __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
 
         # lateral boundary conditions
         for _, prop in lateral_bounds.items():
@@ -1520,6 +1551,8 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         params.CAP_SCALE
     )
 
+    imperm_bounds: List[Tuple] = generate_imperm_top_bc(m_airbounds)
+
     # modify tempe_ls, pres_ls, xco2_ls
     if load_from_latest:
         pth = Path(pth)
@@ -1555,12 +1588,12 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
     # relative permeability
     # sattab = calc_sattab(method="None")
 
-    # permx_ls = [mdarcy2si(i) for i in perm_ls[0]]
-    # permx_with_nan = np.where(np.array(permx_ls) <= 0, np.nan, np.array(permx_ls))
+    # permx_ls = [mdarcy2si(i) for i in perm_ls[0]] #!
+    # permx_with_nan = np.where(np.array(permx_ls) <= 0, np.nan, np.array(permx_ls)) #!
     # permz_ls = [mdarcy2si(i) for i in perm_ls[2]]
     # permz_with_nan = np.where(np.array(permz_ls) <= 0, np.nan, np.array(permz_ls))
     # print(max(permx_ls), max(permz_ls))
-    # plt_any_val(np.log10(permx_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permx2", r'Log $m^2$', _min=-14, _max=-9)
+    # plt_any_val(np.log10(permx_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permx3", r'Log $m^2$', _min=-14, _max=-9) #!
     # plt_any_val(np.log10(permz_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permz2", r'Log $m^2$',_min=-14, _max=-9)
     # for px, pv in zip(permx_ls, permz_ls):
     #     print(px, pv)
@@ -1590,7 +1623,8 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
                      pres_ls,
                      xco2_ls,
                      m_airbounds,
-                     surf_lateral,), pkf)
+                     surf_lateral,
+                     imperm_bounds), pkf)
 
     generate_input(
         DXYZ[0],
@@ -1609,6 +1643,7 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         xco2_ls,
         m_airbounds,
         surf_lateral,
+        imperm_bounds,
         None,
         src_props,
         sinkpos,
@@ -1619,10 +1654,11 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
 
 
 if __name__ == "__main__":
-    generate_from_params(PARAMS(temp_src=300.0,
-                                comp1t=1.0e-4,
-                                perm_vent=10.0,
-                                inj_rate=100.0,
-                                cap_scale=10000.0),
-                        Path(getcwd()).joinpath("tmp.RUN"))
+    # generate_from_params(PARAMS(temp_src=300.0,
+    #                             comp1t=1.0e-4,
+    #                             perm_vent=10.0,
+    #                             inj_rate=100.0,
+    #                             cap_scale=10000.0),
+    #                     Path(getcwd()).joinpath("tmp.RUN"))
+    # print(calc_tstep(10.0, 10000.0, ))
     pass

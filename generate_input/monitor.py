@@ -16,6 +16,7 @@ import pickle
 from constants import (
     CONVERSION_CRITERIA,
     DXYZ,
+    ORIGIN,
     CACHE_DIR,
     IDX_AIR,
     CONDS_PID_MAP_NAME,
@@ -346,17 +347,17 @@ def plot_sum(
     grid_x, grid_y = None, None
     if axis == "x":
         val_3d = np.transpose(val_3d, (2, 0, 1))
-        val_3d = np.flip(val_3d, 1)
+        # val_3d = np.flip(val_3d, 1)
         val_3d = np.flip(val_3d, 2)
         grid_x, grid_y = np.meshgrid(
-            np.array(stack_from_center(DXYZ[1])), np.array(stack_from_0(DXYZ[2]))
+            np.array(stack_from_center(DXYZ[1])), ORIGIN[2] - np.array(stack_from_0(DXYZ[2]))
         )
     if axis == "y":
         val_3d = np.transpose(val_3d, (1, 0, 2))
         val_3d = np.flip(val_3d, 0)
-        val_3d = np.flip(val_3d, 1)
+        # val_3d = np.flip(val_3d, 1)
         grid_x, grid_y = np.meshgrid(
-            np.array(stack_from_center(DXYZ[0])), np.array(stack_from_0(DXYZ[2]))
+            np.array(stack_from_center(DXYZ[0])), ORIGIN[2] - np.array(stack_from_0(DXYZ[2]))
         )
     if axis == "z":
         val_3d = np.flip(val_3d, 0)
@@ -599,9 +600,12 @@ if __name__ == "__main__":
     #         print(i)
 
     plot_results(
-        r"E:\tarumai_tmp\900.0_0.1_10000.0_10.0_100000.0\tmp.0305.SUM", ("Y"), True, 10.0, 200.0, ["TEMPC"]
+        r"E:\tarumai_tmp14\900.0_0.1_10000.0_10000.0_1.0\tmp.0033.SUM", ("Y"), True, 10.0, 300.0, ["TEMPC",]
     )  # ← ここから
-    # plt_warning_tstep(r"E:\tarumai_tmp5\900.0_0.1_10000.0_10.0_1.0")
+    plot_results(
+        r"E:\tarumai_tmp14\900.0_0.1_10000.0_10000.0_1.0\tmp.0033.SUM", ("Y"), True, 0.0, 1.0, ["SAT#GAS",]
+    )  # ← ここから
+    # plt_warning_tstep(r"E:\tarumai_tmp6\900.0_0.1_10000.0_10.0_1.0")
 
     # target_ls = (
     #     r"E:\tarumai4\900.0_0.001_1000.0_10.0",
@@ -630,7 +634,8 @@ if __name__ == "__main__":
     # kill(23152, 15)
     # print(calc_ijk(2142, 40, 40))
 
-    # load_results_and_plt_conv(r"E:\tarumai_tmp5\900.0_0.1_10000.0_10.0_1.0")
+    # load_results_and_plt_conv(r"E:\tarumai_tmp12\900.0_0.1_10000.0_10000.0")
+    # load_results_and_plt_conv(r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0")
 
     # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0
     pass
