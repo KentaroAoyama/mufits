@@ -79,7 +79,10 @@ from constants import (
     NDTEND,
     TMULT,
     SINK_PARAMS,
-    PERM_MAX
+    PERM_MAX,
+    TSTEP_UNREST,
+    TRPT_UNREST,
+    TEND_UNREST,
 )
 
 from params import PARAMS, TUNING_PARAMS
@@ -170,7 +173,14 @@ def generate_simple_vent(
         topo_arr = np.where(filt, IDX_VENT, topo_arr)
     return topo_arr.tolist()
 
-def generate_simple_cap(topo_ls: List, xc_m: List, yc_m: List, elv_cap: float, cap_bounds: Polygon,) -> List:
+
+def generate_simple_cap(
+    topo_ls: List,
+    xc_m: List,
+    yc_m: List,
+    elv_cap: float,
+    cap_bounds: Polygon,
+) -> List:
     zc_ls = stack_from_0(DXYZ[2])
     zc_arr = ORIGIN[2] - np.array(zc_ls)
     k = np.argmin(np.square(zc_arr - elv_cap))
@@ -184,9 +194,10 @@ def generate_simple_cap(topo_ls: List, xc_m: List, yc_m: List, elv_cap: float, c
             ytmp = yc_m[m] + y0
             if cap_bounds.contains(Point(xtmp, ytmp)):
                 topo_ls[m] = IDX_CAP
-                if topo_ls[calc_m(i, j, k-1, nx, ny)] == IDX_VENT and k > 0:
+                if topo_ls[calc_m(i, j, k - 1, nx, ny)] == IDX_VENT and k > 0:
                     topo_ls[m] = IDX_CAPVENT
     return topo_ls
+
 
 def generate_topo(
     pth_dem: PathLike,
@@ -411,8 +422,9 @@ def generate_act_ls(topo_ls: List[int]) -> List[int]:
         actnum_ls.append(actnum)
     return actnum_ls
 
+
 def fix_perm(v: float) -> float:
-    """ Correct the permeability to a reasonable value.
+    """Correct the permeability to a reasonable value.
 
     Args:
         v (float): Permeability in mD
@@ -425,6 +437,7 @@ def fix_perm(v: float) -> float:
     if v < 0.0:
         v = si2mdarcy(PERM_MAX)
     return v
+
 
 def generamte_rocknum_and_props(
     topo_ls: List[int],
@@ -470,8 +483,8 @@ def generamte_rocknum_and_props(
                 if _idx == IDX_VENT:
                     # kh = fix_perm(vent_scale * calc_k_z(z0, z1))
                     # kv = fix_perm(vent_scale * calc_kv(z0, z1))
-                    kh = fix_perm(vent_scale * calc_k_z((z0 + z1) * 0.5)) #!
-                    kv = kh #!
+                    kh = fix_perm(vent_scale * calc_k_z((z0 + z1) * 0.5))  #!
+                    kv = kh  #!
                     permx_ls[m] = kh
                     permy_ls[m] = kh
                     permz_ls[m] = kv
@@ -488,14 +501,14 @@ def generamte_rocknum_and_props(
                 elif _idx == IDX_LAND:
                     # kh = fix_perm(calc_kh(z0, z1))
                     # kv = fix_perm(calc_kv(z0, z1))
-                    kh = fix_perm(calc_k_z((z0 + z1) * 0.5)) #!
-                    kv = kh #!
+                    kh = fix_perm(calc_k_z((z0 + z1) * 0.5))  #!
+                    kv = kh  #!
                     permx_ls[m] = kh
                     permy_ls[m] = kh
                     permz_ls[m] = kv
                 # z += gz[k] * 0.5
                 z0 = z1
-    
+
     rocknum_ptgrad = {}
     for _idx in topo_unique:
         _prop = rocknum_ptgrad.setdefault(topo_rocknum_map[_idx], {})
@@ -622,18 +635,27 @@ def generamte_rocknum_and_props(
         i, j, k = calc_ijk(m, nx, ny)
         m_above = calc_m(i, j, k - 1, nx, ny)
         if k == 0:
-            m_airbounds.setdefault(m, {"FLUXNUM": fluxnum,
-                                       "TEMPC": TEMPE_AIR,
-                                       "PRES": pres_top,
-                                       })
+            m_airbounds.setdefault(
+                m,
+                {
+                    "FLUXNUM": fluxnum,
+                    "TEMPC": TEMPE_AIR,
+                    "PRES": pres_top,
+                },
+            )
             fluxnum += 1
             continue
         if topo_ls[m_above] == IDX_AIR:
             z = sum(gz[:k])
-            m_airbounds.setdefault(m, {"FLUXNUM": fluxnum,
-                                       "TEMPC": TEMPE_AIR,
-                                       "PRES": pres_top + TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * z * 1.0e-6,
-                                       })
+            m_airbounds.setdefault(
+                m,
+                {
+                    "FLUXNUM": fluxnum,
+                    "TEMPC": TEMPE_AIR,
+                    "PRES": pres_top
+                    + TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * z * 1.0e-6,
+                },
+            )
             fluxnum += 1
             continue
 
@@ -642,8 +664,8 @@ def generamte_rocknum_and_props(
     for m in m_airbounds:
         i, j, k = calc_ijk(m, nx, ny)
         not_inc = True
-        for itmp in (i-1, i, i+1):
-            for jtmp in (j-1, j, j+1):
+        for itmp in (i - 1, i, i + 1):
+            for jtmp in (j - 1, j, j + 1):
                 if itmp in (-1, nx):
                     continue
                 if jtmp in (-1, ny):
@@ -666,10 +688,17 @@ def generamte_rocknum_and_props(
                     props.setdefault("Direction", []).append(b)
                     # calc XCO2
                     if xco2 is None:
-                        xco2 = calc_xco2_rain(pres_ls[mtmp] * 1.0e6, 3.8e-4) # TODO: XCO2 should be loaded from constants.py
-                    props.setdefault("prop", {"PRES": pres_ls[mtmp],
-                                              "TEMPC": tempe_ls[mtmp],
-                                              "COMP1T": xco2})
+                        xco2 = calc_xco2_rain(
+                            pres_ls[mtmp] * 1.0e6, 3.8e-4
+                        )  # TODO: XCO2 should be loaded from constants.py
+                    props.setdefault(
+                        "prop",
+                        {
+                            "PRES": pres_ls[mtmp],
+                            "TEMPC": tempe_ls[mtmp],
+                            "COMP1T": xco2,
+                        },
+                    )
                     props.setdefault("FLUXNUM", fluxnum)
                     if not_inc:
                         fluxnum += 1
@@ -684,10 +713,12 @@ def generamte_rocknum_and_props(
             m = calc_m(i, j, k, nx, ny)
             if m not in m_airbounds:
                 continue
-            prop = {"FLUXNUM": fluxnum,
-                    "PRES": pres_top,
-                    "TEMPC": TEMPE_AIR,
-                    "COMP1T": calc_xco2_rain(pres_top*1.0e6, 3.8e-4)} # TODO: load from constant
+            prop = {
+                "FLUXNUM": fluxnum,
+                "PRES": pres_top,
+                "TEMPC": TEMPE_AIR,
+                "COMP1T": calc_xco2_rain(pres_top * 1.0e6, 3.8e-4),
+            }  # TODO: load from constant
             top_props.setdefault(m, prop)
             fluxnum += 1
 
@@ -1009,7 +1040,6 @@ def generate_input(
         #         f"   {fluxnum}   {i} {i} {j} {j} {k} {k} {dsum} {cou_none}*                   INFTHIN   4* 2  2 /    <- Surface boundary (lateral)"
         #     )
 
-
         # bottom boundary
         for (i, j, k), prop in bottom_bounds.items():
             if i == srci and j == srcj and k == srck:
@@ -1254,7 +1284,7 @@ def generate_input(
             __write(f"TEMPC   {T} FLUXNUM {FLUXNUM} /    <- Bottom boundary")
             __write(f"PRES   {P} FLUXNUM {FLUXNUM} /")
             __write(f"COMP1T   {COMP1T} FLUXNUM {FLUXNUM} /")
-        
+
         # # AIR-Land boundary (top)
         # for m, prop in m_airbounds.items():
         #     FLUXNUM = prop["FLUXNUM"]
@@ -1281,7 +1311,6 @@ def generate_input(
         __write("/")
         __write("")  # \n
 
-        
         # OPERAREG (set initial value)
         __write("OPERAREG")
         for rocknum, prop in rocknum_pt_grad.items():
@@ -1292,32 +1321,35 @@ def generate_input(
         __write("/")
         __write("")  # \n
 
-        # # TEMPC
-        # __write("TEMPC")
-        # _str: str = ""
-        # for _v in tempe_ls:
-        #     _str += str(_v) + "  "
-        # _str += "  /"
-        # __write(_str)
-        # __write("")  # \n
+        # TEMPC
+        if tempe_ls is not None:
+            __write("TEMPC")
+            _str: str = ""
+            for _v in tempe_ls:
+                _str += str(_v) + "  "
+            _str += "  /"
+            __write(_str)
+            __write("")  # \n
 
-        # # PRES
-        # __write("PRES")
-        # _str: str = ""
-        # for _v in pres_ls:
-        #     _str += str(_v) + "  "
-        # _str += "  /"
-        # __write(_str)
-        # __write("")  # \n
+        # PRES
+        if pres_ls is not None:
+            __write("PRES")
+            _str: str = ""
+            for _v in pres_ls:
+                _str += str(_v) + "  "
+            _str += "  /"
+            __write(_str)
+            __write("")  # \n
 
-        # # COMP1T
-        # __write("COMP1T")
-        # _str: str = ""
-        # for _v in xco2_ls:
-        #     _str += str(_v) + "  "
-        # _str += "  /"
-        # __write(_str)
-        # __write("")  # \n
+        # COMP1T
+        if xco2_ls is not None:
+            __write("COMP1T")
+            _str: str = ""
+            for _v in xco2_ls:
+                _str += str(_v) + "  "
+            _str += "  /"
+            __write(_str)
+            __write("")  # \n
 
         # OPERAREG (set initial value)
         # __write("OPERAREG")
@@ -1355,7 +1387,7 @@ def generate_input(
         # RPTSUM
         __write("RPTSUM")
         __write(
-            "   PRES TEMPC PHST SAT#LIQ SAT#GAS COMP1T COMP2T/  We specify the properties saved at every report time."
+            "   PRES TEMPC PHST SAT#LIQ SAT#GAS FLUXK#E COMP1T COMP2T/  We specify the properties saved at every report time."
         )
         __write("")  # \n
 
@@ -1376,7 +1408,7 @@ def generate_input(
 
         # NEWTON #!
         __write("NEWTON")
-        __write("1   2   2 /") # 1, 3, 3 ?
+        __write("1   2   2 /")  # 1, 3, 3 ?
         __write("")
 
         # SRCINJE
@@ -1396,20 +1428,18 @@ def generate_input(
         # TUNING
         years_total = 0.0
         ts = TSTEP_INIT
+        if tuning_params is not None:
+            ts = tuning_params[0]
         ts_max = calc_tstep(params.VENT_SCALE, params.INJ_RATE)
         #!
         if params.VENT_SCALE == 1000.0:
             ts_max = 2.0
         if params.VENT_SCALE == 10000.0:
             ts_max = 1.0
-
-        # ts_max = 0.0009259 # 80 s
-        if tuning_params is not None: #!
-            ts_max = tuning_params.get((params.SRC_TEMP, params.SRC_COMP1T,  params.INJ_RATE, params.VENT_SCALE), None)
-            ts = ts_max
-            if ts_max is None:
-                ts_max = 0.0009259
-                ts = ts_max
+        if params.INJ_RATE == 100000.0:
+            ts_max = 1.0
+        if tuning_params is not None:
+            ts_max = tuning_params[1]
         time_rpt = 0.0
         while years_total < TIME_SS:
             if ts > ts_max:
@@ -1478,7 +1508,77 @@ def generate_input(
         )
 
 
-def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool = False,) -> None:
+def modify_file(sumpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
+
+    nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
+    nxyz = nx * ny * nz
+    assert len(tempe_ls) == nxyz, len(tempe_ls)
+    assert len(pres_ls) == nxyz, len(pres_ls)
+    assert len(xco2_ls) == nxyz, len(xco2_ls)
+
+    with open(sumpth, "r") as f:
+        lines = f.readlines()
+
+    ln_insert = None
+    for i, l in enumerate(lines):
+        if "OPERAREG" in l:
+            for j in range(i + 1, i + 1000):
+                if "/\n" in lines[j] and lines[j + 1] == "/\n":
+                    ln_insert = j + 2
+                    break
+
+    trpt = 0.0
+    delete_index = set()
+    for i, l in enumerate(lines):
+        if "TUNING" in l:
+            if trpt > TEND_UNREST:
+                delete_index.update([i, i + 1, i + 2, i + 3])
+                continue
+            trpt += TRPT_UNREST
+            lines[i + 1] = f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n"
+            lines[i + 3] = f"    {trpt} /\n"
+    lines = [lines[i] for i in range(len(lines)) if i not in delete_index]
+    with open(tpth, "w") as f:
+        for ln, line in enumerate(lines):
+            if ln == ln_insert:
+                # TEMPC
+                f.write("\n")
+                f.write("TEMPC\n")
+                _str: str = ""
+                for _v in tempe_ls:
+                    _str += str(_v) + "  "
+                _str += "  /\n"
+                f.write(_str)
+                f.write("\n")  # \n
+
+                # PRES
+                f.write("PRES\n")
+                _str: str = ""
+                for _v in pres_ls:
+                    _str += str(_v) + "  "
+                _str += "  /\n"
+                f.write(_str)
+                f.write("\n")  # \n
+
+                # COMP1T
+                f.write("COMP1T\n")
+                _str: str = ""
+                for _v in xco2_ls:
+                    _str += str(_v) + "  "
+                _str += "  /\n"
+                f.write(_str)
+                f.write("\n")  # \n
+
+            f.write(line)
+
+
+def generate_from_params(
+    params: PARAMS,
+    pth: PathLike,
+    continue_from_latest: bool = False,
+    refpth: PathLike = None,
+    tuning_params: Tuple = None,
+) -> None:
     """Generate RUN file for single condition
 
     Args:
@@ -1488,6 +1588,44 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
             (NOTE: file path is assumed to be a subdirectory of the previous working directory)
     """
     nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
+    # modify tempe_ls, pres_ls, xco2_ls
+    if continue_from_latest:
+        pth = Path(pth)
+        # file path is assumed to be a subdirectory of the previous working directory
+        dirpth = pth.parent.parent
+        for i in range(1000):
+            iter_dir = dirpth.joinpath(f"ITER_{i}")
+            if iter_dir.exists():
+                dirpth = iter_dir
+            else:
+                break
+        started: bool = False
+        for i in range(100000):
+            fn = str(i).zfill(4)
+            fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+            if i == 0 and not fpth.exists():
+                started = False
+                break
+            elif i == 0 and fpth.exists():
+                started = True
+            elif not fpth.exists():
+                fn = fn = str(i - 1).zfill(4)
+                fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+                break
+        if started:
+            nxyz = nxyz[0] * nxyz[1] * nxyz[2]
+            cellid_props, _, time = load_sum(fpth)
+            tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
+            pres_ls = get_v_ls(cellid_props, "PRES")[:nxyz]
+            xco2_ls = get_v_ls(cellid_props, "COMP1T")[:nxyz]
+            modify_file(
+                dirpth.joinpath("tmp.RUN"),
+                pth,
+                tempe_ls,
+                pres_ls,
+                xco2_ls,
+            )
+            return
 
     cache_topo = CACHE_DIR.joinpath("topo_ls")
     topo_ls: List = None
@@ -1548,39 +1686,19 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         DXYZ[2],
         params.TOPO_PROPS,
         params.VENT_SCALE,
-        params.CAP_SCALE
+        params.CAP_SCALE,
     )
 
     imperm_bounds: List[Tuple] = generate_imperm_top_bc(m_airbounds)
 
-    # modify tempe_ls, pres_ls, xco2_ls
-    if load_from_latest:
-        pth = Path(pth)
-        # file path is assumed to be a subdirectory of the previous working directory
-        dirpth = pth.parent.parent
-        for i in range(1000):
-            if dirpth.joinpath(f"ITER_{i}").exists():
-                dirpth = dirpth.joinpath(f"ITER_{i}")
-            else:
-                break
-        started: bool = False
-        for i in range(100000):
-            fn = str(i).zfill(4)
-            fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
-            if i == 0 and not fpth.exists():
-                started = False
-                break
-            elif i == 0 and fpth.exists():
-                started = True
-            elif not fpth.exists():
-                fn = fn = str(i-1).zfill(4)
-                fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
-                break
-        if started:
-            cellid_props, _, time = load_sum(fpth)
-            tempe_ls = get_v_ls(cellid_props, "TEMPC")
-            pres_ls = get_v_ls(cellid_props, "PRES")
-            xco2_ls = get_v_ls(cellid_props, "COMP1T")
+    if refpth is not None:
+        nxyz = nxyz[0] * nxyz[1] * nxyz[2]
+        cellid_props, _, time = load_sum(fpth)
+        tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
+        pres_ls = get_v_ls(cellid_props, "PRES")[:nxyz]
+        xco2_ls = get_v_ls(cellid_props, "COMP1T")[:nxyz]
+    else:
+        tempe_ls, pres_ls, xco2_ls = None, None, None
 
     # debug
     # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
@@ -1606,25 +1724,27 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
         "tempe": params.SRC_TEMP,
         "comp1t": params.SRC_COMP1T,
     }
-    tuning_params = TUNING_PARAMS.copy()
-    if not load_from_latest:
-        tuning_params = None
 
     # debug
     with open(Path(pth).parent.joinpath("debug.pkl"), "wb") as pkf:
-        pickle.dump((actnum_ls,
-                     rocknum_ls,
-                     perm_ls,
-                     rocknum_params,
-                     lateral_bounds,
-                     bottom_bounds,
-                     rocknum_ptgrad,
-                     tempe_ls,
-                     pres_ls,
-                     xco2_ls,
-                     m_airbounds,
-                     surf_lateral,
-                     imperm_bounds), pkf)
+        pickle.dump(
+            (
+                actnum_ls,
+                rocknum_ls,
+                perm_ls,
+                rocknum_params,
+                lateral_bounds,
+                bottom_bounds,
+                rocknum_ptgrad,
+                tempe_ls,
+                pres_ls,
+                xco2_ls,
+                m_airbounds,
+                surf_lateral,
+                imperm_bounds,
+            ),
+            pkf,
+        )
 
     generate_input(
         DXYZ[0],
@@ -1653,12 +1773,31 @@ def generate_from_params(params: PARAMS, pth: PathLike, load_from_latest: bool =
     )
 
 
+from utils import condition_to_dir
+
 if __name__ == "__main__":
-    # generate_from_params(PARAMS(temp_src=300.0,
-    #                             comp1t=1.0e-4,
-    #                             perm_vent=10.0,
-    #                             inj_rate=100.0,
-    #                             cap_scale=10000.0),
-    #                     Path(getcwd()).joinpath("tmp.RUN"))
+    temp_src = 900.0
+    comp1t = 0.1
+    perm_vent = 1.0
+    inj_rate = 10000.0
+    cap_scale = 100000.0
+    basedir = r"E:\tarumai_tmp16"
+    from_latest = True
+    dirpth: Path = condition_to_dir(
+        basedir, temp_src, comp1t, inj_rate, perm_vent, cap_scale, from_latest
+    )
+    makedirs(dirpth, exist_ok=True)
+    print(dirpth)
+    generate_from_params(
+        PARAMS(
+            temp_src=temp_src,
+            comp1t=comp1t,
+            perm_vent=perm_vent,
+            inj_rate=inj_rate,
+            cap_scale=cap_scale,
+        ),
+        dirpth.joinpath("tmp.RUN"),
+        from_latest,
+    )
     # print(calc_tstep(10.0, 10000.0, ))
     pass

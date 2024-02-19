@@ -103,9 +103,15 @@ def condition_to_dir(
             break
     return sim_dir_tmp
 
-def dir_to_condition(cond_dir: PathLike) -> Tuple[float]:
+def unrest_dir(sim_dir: PathLike) -> Path:
+    unrest_dir = Path(sim_dir).joinpath("unrest")
+    makedirs(unrest_dir, exist_ok=True)
+    return unrest_dir
+
+def dir_to_condition(cond_dir: PathLike) -> List[float]:
     conds_str = str(Path(cond_dir).name).split("_")
-    return (float(cond) for cond in conds_str)
+    _ls = [float(cond) for cond in conds_str]
+    return _ls
 
 def calc_press_air(elv: float) -> float:
     """Calculate air pressure in Pa
@@ -384,7 +390,7 @@ if __name__ == "__main__":
     # print(calc_ijk(2811, 40, 40))
     # print(mdarcy2si(1.0e9))
     # print(P_GRAD_AIR)
-    print(calc_infiltration())
+    print(calc_infiltration() / RAIN_AMOUNT * 365.25)
     # print(mdarcy2si(1013249.9658281449))
     # q0 = 500.0 * 500.0 * 3.53 * 1.0e-3
     # q1 = 10000.0

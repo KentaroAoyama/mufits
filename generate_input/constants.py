@@ -317,7 +317,7 @@ T_GRAD_LAKE = 0.0
 T_GRAD_ROCK = 0.06
 
 # Time taken to reproduce steady state (in years)
-TIME_SS = 500
+TIME_SS = 1 #!
 
 # Initial time step (in days)
 TSTEP_MIN = 1.0e-12
@@ -333,7 +333,11 @@ NDTFIRST = 400
 NDTEND = 400
 TMULT = 7.0
 
-OUTDIR = r"E:\tarumai_tmp14"
+TSTEP_UNREST = 1.0
+TRPT_UNREST = 365.25 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
+TEND_UNREST = 365.25 * 200
+
+OUTDIR = r"E:\tarumai"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

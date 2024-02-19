@@ -1,0 +1,11 @@
+tempe:
+- "same"
+comp1t:
+- "same"
+inj_rate:
+- 10000.0
+- 100000.0
+perm:
+- "same"
+cap_scale:
+- 100000.0

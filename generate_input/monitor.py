@@ -10,6 +10,7 @@ import re
 from statistics import median
 
 import numpy as np
+from pyproj import Transformer
 from matplotlib import pyplot as plt
 import pickle
 
@@ -19,8 +20,13 @@ from constants import (
     ORIGIN,
     CACHE_DIR,
     IDX_AIR,
+    IDX_CAP,
+    IDX_CAPVENT,
     CONDS_PID_MAP_NAME,
     OUTDIR,
+    CRS_DEM,
+    CRS_RECT,
+    POS_SINK
 )
 from utils import (
     calc_ijk,
@@ -586,6 +592,53 @@ def load_results_and_plt_conv(dirpth: PathLike):
         time_ls, diff_ls = calc_change_rate(props_ls, prop_name)
         plt_conv(time_ls, diff_ls, dirpth.joinpath("tmp").joinpath(f"{prop_name}.png"))
 
+def get_fumarole_prop(cond_dir: PathLike, prop_name: str = "TEMPC"):
+    cond_dir = Path(cond_dir)
+    fpth_ls = []
+    for i in range(10000):
+        fn = str(i).zfill(4)
+        fpth = cond_dir.joinpath(f"tmp.{fn}.SUM")
+        if fpth.exists():
+            fpth_ls.append(fpth)
+
+    if len(fpth_ls) == 0:
+        return
+    
+    cellid_props, _, time = load_sum(fpth_ls[-1])
+    v_ls = get_v_ls(cellid_props, prop_name)
+
+    # coordinates
+    nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
+    x = np.array(stack_from_center(DXYZ[0]))
+    y = -1.0 * np.array(stack_from_center(DXYZ[1]))
+    
+    transformer = Transformer.from_crs(CRS_DEM, CRS_RECT, always_xy=True)
+    x0, y0 = transformer.transform(ORIGIN[1], ORIGIN[0])
+    coords_fumarole: Dict = {}
+    for name, pos in POS_SINK.items():
+        xtmp, ytmp = transformer.transform(pos[1], pos[0])
+        coords_fumarole.setdefault(name, (xtmp - x0, ytmp - y0))
+    
+    cache_topo = CACHE_DIR.joinpath("topo_ls")
+    with open(cache_topo, "rb") as pkf:
+        topo_ls, _ = pickle.load(pkf)
+
+    f = open(cond_dir.joinpath(f"fumarole_{prop_name}.txt"), "w")
+    for name, (xf, yf) in coords_fumarole.items():
+        # get closest grid
+        i = np.argmin(np.square(x - xf))
+        j = np.argmin(np.square(y - yf))
+        for k in range(nz):
+            m = calc_m(i, j, k, nx, ny)
+            if topo_ls[m] in (IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT):
+                v = v_ls[m]
+                if prop_name == "FLUXK#E":
+                    v *= -1
+                f.write(f"{name}: {v}\n")
+                break
+    
+    f.close()
+
 
 from utils import calc_m, calc_press_air
 from constants import IDX_AIR, IDX_LAND, IDX_VENT, DXYZ
@@ -599,12 +652,25 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
 
+    pth = r"E:\tarumai\200.0_0.0_10000.0_10.0_100000.0\tmp.0057.SUM"
+    # plot_results(
+    #     pth, ("Y"), False, None, None, ["FLUXK#E",]
+    # )  # ← ここから
     plot_results(
-        r"E:\tarumai_tmp14\900.0_0.1_10000.0_10000.0_1.0\tmp.0033.SUM", ("Y"), True, 10.0, 300.0, ["TEMPC",]
+        pth, ("Y"), False, 10.0, 500.0, ["TEMPC",]
     )  # ← ここから
     plot_results(
-        r"E:\tarumai_tmp14\900.0_0.1_10000.0_10000.0_1.0\tmp.0033.SUM", ("Y"), True, 0.0, 1.0, ["SAT#GAS",]
+        pth, ("Y"), False, 0.0, 1.0, ["SAT#GAS",]
     )  # ← ここから
+    plot_results(
+        pth, ("Y"), False, 0.0, 10.0, ["PRES",]
+    )  # ← ここから
+
+    # pth = r"E:\tarumai\200.0_0.0_10000.0_10.0_100000.0"
+    # get_fumarole_prop(pth, "TEMPC")
+    # get_fumarole_prop(pth, "FLUXK#E")
+
+
     # plt_warning_tstep(r"E:\tarumai_tmp6\900.0_0.1_10000.0_10.0_1.0")
 
     # target_ls = (
@@ -631,10 +697,10 @@ if __name__ == "__main__":
     # for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
     #     time_ls, changerate_ls = calc_change_rate(props_ls, metric)
     #     plt_conv(time_ls, changerate_ls, rf"E:\tarumai4\700.0_0.0_10000.0_1000.0\tmp\{metric}.png")
-    # kill(23152, 15)
     # print(calc_ijk(2142, 40, 40))
 
-    # load_results_and_plt_conv(r"E:\tarumai_tmp12\900.0_0.1_10000.0_10000.0")
+    load_results_and_plt_conv(r"E:\tarumai\200.0_0.1_10000.0_10000.0_1.0")
+    # kill(14104, 15)
     # load_results_and_plt_conv(r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0")
 
     # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0
