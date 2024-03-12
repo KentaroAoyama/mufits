@@ -1,6 +1,13 @@
 import pickle
 from pyproj import Transformer
-from shapely import Polygon
+from shapely import Polygon, Point
+from pathlib import Path
+
+import sys
+sys.path.append('../')
+
+from constants import ORIGIN, DXYZ, IDX_SEA, IDX_LAKE, IDX_AIR, CRS_WGS84, CRS_RECT, CACHE_DIR
+from utils import calc_m, stack_from_center
 
 COORDS = [(141.372993,42.695787),
         (141.372628,42.695282),
@@ -64,7 +71,40 @@ def wgs2rect():
     crator = Polygon(xy_ls)
     with open("./crator.pkl", "wb") as pkf:
         pickle.dump(crator, pkf, pickle.HIGHEST_PROTOCOL)
+    return crator
 
+def get_m():
+    rect_trans = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
+    x0, y0 = rect_trans.transform(ORIGIN[1], ORIGIN[0])
+    xc_ls = stack_from_center(DXYZ[0])
+    yc_ls = stack_from_center(DXYZ[1])
+    xc_ls = [x0 + xc for xc in xc_ls]
+    yc_ls = [y0 - yc for yc in yc_ls]
+    dome: Polygon = wgs2rect()
+    with open(Path.cwd().parent.joinpath("cache").joinpath("topo_ls"), "rb") as pkf: #!
+        topo_ls, _ = pickle.load(pkf)
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
+    m_ls = []
+    for j, yc in enumerate(yc_ls):
+        for i, xc in enumerate(xc_ls):
+            m = calc_m(i, j, 0, nx, ny)
+            if topo_ls[m] in (IDX_AIR, IDX_LAKE, IDX_SEA):
+                continue
+            if dome.contains(Point(xc, yc)):
+                m_ls.append(m)
+    with open(Path.cwd().joinpath("m_ls"), "wb") as pkf:
+        pickle.dump(m_ls, pkf)
+    return m_ls
+
+from matplotlib import pyplot as plt
+from utils import calc_ijk
 if __name__ == "__main__":
-    wgs2rect()
+    m_ls = get_m()
+    i_ls, j_ls = [], []
+    for m in m_ls:
+        i, j, k = calc_ijk(m, 40, 40)
+        i_ls.append(i)
+        j_ls.append(j)
+    plt.scatter(i_ls, j_ls)
+    plt.show()
     pass

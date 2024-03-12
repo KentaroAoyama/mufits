@@ -447,6 +447,7 @@ def generamte_rocknum_and_props(
     topo_props: Dict,
     vent_scale: float,
     cap_scale: float,
+    vk: bool,
 ) -> Tuple[List, Dict, Dict, Dict, Dict]:
     nx, ny, nz = nxyz
     topo_unique = []
@@ -479,12 +480,15 @@ def generamte_rocknum_and_props(
                     permy_ls[m] = topo_props[_idx]["PERMY"]
                     permz_ls[m] = topo_props[_idx]["PERMZ"]
                     continue
-                # z += gz[k] * 0.5
                 if _idx == IDX_VENT:
-                    # kh = fix_perm(vent_scale * calc_k_z(z0, z1))
-                    # kv = fix_perm(vent_scale * calc_kv(z0, z1))
-                    kh = fix_perm(vent_scale * calc_k_z((z0 + z1) * 0.5))  #!
-                    kv = kh  #!
+                    _k = fix_perm(calc_k_z((z0 + z1) * 0.5))
+                    kh, kv = None, None
+                    if vk:
+                        kh = _k
+                        kv = fix_perm(vent_scale * _k)
+                    else:
+                        kh = fix_perm(vent_scale * _k)
+                        kv = kh
                     permx_ls[m] = kh
                     permy_ls[m] = kh
                     permz_ls[m] = kv
@@ -499,14 +503,11 @@ def generamte_rocknum_and_props(
                     permy_ls[m] = v
                     permz_ls[m] = v
                 elif _idx == IDX_LAND:
-                    # kh = fix_perm(calc_kh(z0, z1))
-                    # kv = fix_perm(calc_kv(z0, z1))
                     kh = fix_perm(calc_k_z((z0 + z1) * 0.5))  #!
                     kv = kh  #!
                     permx_ls[m] = kh
                     permy_ls[m] = kh
                     permz_ls[m] = kv
-                # z += gz[k] * 0.5
                 z0 = z1
 
     rocknum_ptgrad = {}
@@ -877,6 +878,19 @@ def generate_input(
         __write("HCROCK                                  We enable heat conduction.")
         __write("")  # \n
 
+        # #  DUALPORO
+        # __write("DUALPORO")
+        # __write("")
+
+        # # GRAVDR
+        # __write("GRAVDR                                  We enable heat gravity calculation.")
+        # __write("")  # \n
+
+        # GRAVIMET
+        # __write("GRAVIMET")
+        # __write("   ")
+        # __write("")  # \n
+
         # GRID
         __write(
             "GRID      ##################### GRID section begins here #######################"
@@ -931,6 +945,19 @@ def generate_input(
         _str += " /"
         __write(_str)
         __write("")
+
+        # # OBSSPECM #! 各軸4個間隔で置く
+        # __write("OBSSPECM")
+        # for m in m_airbounds:
+        #     i, j, k = calc_ijk(m, nx, ny)
+        #     if i % 4 == 0 and j % 4 == 0:
+        #         # sum([]) .eq. 0
+        #         xmap = sum(gx[:i])
+        #         ymap = sum(gy[:j])
+        #         depth = sum(gz[:k])
+        #         __write(f"{m} {xmap} {ymap} {depth} /")
+        # __write("/")
+        # __write("")
 
         # ACTNUM
         __write("ACTNUM")
@@ -1387,7 +1414,7 @@ def generate_input(
         # RPTSUM
         __write("RPTSUM")
         __write(
-            "   PRES TEMPC PHST SAT#LIQ SAT#GAS FLUXK#E COMP1T COMP2T/  We specify the properties saved at every report time."
+            "   PRES TEMPC PHST SAT#LIQ SAT#GAS FLUXK#E COMP1T COMP2T DENT/  We specify the properties saved at every report time."
         )
         __write("")  # \n
 
@@ -1436,19 +1463,26 @@ def generate_input(
             ts_max = 2.0
         if params.VENT_SCALE == 10000.0:
             ts_max = 1.0
-        if params.INJ_RATE == 100000.0:
+        if params.INJ_RATE > 10000.0:
             ts_max = 1.0
+            # TMULT = 2.0
         if tuning_params is not None:
             ts_max = tuning_params[1]
         time_rpt = 0.0
-        while years_total < TIME_SS:
+        tend: float = TIME_SS
+        if TEND_UNREST is not None:
+            tend = TEND_UNREST
+        while years_total < tend:
             if ts > ts_max:
                 ts = ts_max
-            tstep_rpt = ts * (
-                NDTFIRST + years_total / TIME_SS * (NDTEND - NDTFIRST)
-            )  # * max(log10(params.VENT_SCALE), log10(params.INJ_RATE) - 1.0)
-            if TIME_SS - years_total < tstep_rpt / 365.25:
-                tstep_rpt = (TIME_SS - years_total) * 365.25
+            if TRPT_UNREST is not None and ts == ts_max:
+                tstep_rpt = TRPT_UNREST
+            else:
+                tstep_rpt = ts * (
+                    NDTFIRST + years_total / tend * (NDTEND - NDTFIRST)
+                )
+            if tend - years_total < tstep_rpt / 365.25:
+                tstep_rpt = (tend - years_total) * 365.25
             time_rpt += tstep_rpt
             # time_rpt += tstep_rpt * max(log10(params.VENT_SCALE), log10(params.INJ_RATE)) #!
             tsmax = ts
@@ -1508,7 +1542,7 @@ def generate_input(
         )
 
 
-def modify_file(sumpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
+def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
 
     nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
     nxyz = nx * ny * nz
@@ -1516,7 +1550,7 @@ def modify_file(sumpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
     assert len(pres_ls) == nxyz, len(pres_ls)
     assert len(xco2_ls) == nxyz, len(xco2_ls)
 
-    with open(sumpth, "r") as f:
+    with open(refpth, "r") as f:
         lines = f.readlines()
 
     ln_insert = None
@@ -1579,7 +1613,7 @@ def generate_from_params(
     refpth: PathLike = None,
     tuning_params: Tuple = None,
 ) -> None:
-    """Generate RUN file for single condition
+    """Generate RUN file from PARAMS class
 
     Args:
         params (PARAMS): Instance containing necessary parameters
@@ -1593,6 +1627,8 @@ def generate_from_params(
         pth = Path(pth)
         # file path is assumed to be a subdirectory of the previous working directory
         dirpth = pth.parent.parent
+        print(f"pth: {pth}")
+        print(f"dirpth: {dirpth}")  #!
         for i in range(1000):
             iter_dir = dirpth.joinpath(f"ITER_{i}")
             if iter_dir.exists():
@@ -1613,6 +1649,8 @@ def generate_from_params(
                 fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
                 break
         if started:
+            print(f"fpth: {fpth}")  #!
+            print(f"pth: {pth}")  #!
             nxyz = nxyz[0] * nxyz[1] * nxyz[2]
             cellid_props, _, time = load_sum(fpth)
             tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
@@ -1664,16 +1702,15 @@ def generate_from_params(
         generate_simple_cap(topo_ls, xc_m, yc_m, 700.0, crator_coords)
     # debug
     # plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
-
     actnum_ls = generate_act_ls(topo_ls)
     (
         rocknum_ls,
         perm_ls,
         rocknum_params,
         rocknum_ptgrad,
-        tempe_ls,
-        pres_ls,
-        xco2_ls,
+        _,
+        _,
+        _,
         lateral_bounds,
         bottom_bounds,
         top_props,
@@ -1687,13 +1724,14 @@ def generate_from_params(
         params.TOPO_PROPS,
         params.VENT_SCALE,
         params.CAP_SCALE,
+        params.VK,
     )
 
     imperm_bounds: List[Tuple] = generate_imperm_top_bc(m_airbounds)
 
     if refpth is not None:
         nxyz = nxyz[0] * nxyz[1] * nxyz[2]
-        cellid_props, _, time = load_sum(fpth)
+        cellid_props, _, time = load_sum(refpth)
         tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
         pres_ls = get_v_ls(cellid_props, "PRES")[:nxyz]
         xco2_ls = get_v_ls(cellid_props, "COMP1T")[:nxyz]

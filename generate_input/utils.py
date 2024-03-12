@@ -88,13 +88,15 @@ def calc_kv(z0: float, z1: float) -> float:
 
 
 def condition_to_dir(
-    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float, cap_scale: float = None, from_latest: bool = False,
+    base_dir: PathLike, tempe_src: float, comp1t: float, inj_rate: float, pearm: float, cap_scale: float = None, from_latest: bool = False, vk: bool = False,
 ) -> PathLike:
     base_dir = Path(base_dir)
-    if cap_scale is None:
-        sim_dir = base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}")
-    else:
-        sim_dir = base_dir.joinpath(f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}_{cap_scale}")
+    name = f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}"
+    if cap_scale is not None:
+        name += f"_{cap_scale}"
+    if vk:
+        name += f"_v"
+    sim_dir = base_dir.joinpath(name)
     if not from_latest:
         return sim_dir
     for i in range(1, 1000):
@@ -110,6 +112,10 @@ def unrest_dir(sim_dir: PathLike) -> Path:
 
 def dir_to_condition(cond_dir: PathLike) -> List[float]:
     conds_str = str(Path(cond_dir).name).split("_")
+    if conds_str[-1] == "v":
+        conds_str[-1] = True
+        _ls = [float(cond)if i<len(conds_str) -1 else True for i, cond in enumerate(conds_str)]
+        return _ls
     _ls = [float(cond) for cond in conds_str]
     return _ls
 
@@ -390,11 +396,12 @@ if __name__ == "__main__":
     # print(calc_ijk(2811, 40, 40))
     # print(mdarcy2si(1.0e9))
     # print(P_GRAD_AIR)
-    print(calc_infiltration() / RAIN_AMOUNT * 365.25)
+    # print(calc_infiltration() / RAIN_AMOUNT * 365.25)
     # print(mdarcy2si(1013249.9658281449))
     # q0 = 500.0 * 500.0 * 3.53 * 1.0e-3
     # q1 = 10000.0
     # print(q0)
     # print((q0 * 10.0 + q1 * 900.0) / (q0 + q1))
     # print(mdarcy2si(calc_kv(0.1, 1150.0)))
+    print(dir_to_condition("./900.0_0.1_100.0_100.0_100.0"))
     pass

@@ -13,7 +13,8 @@ class PARAMS:
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
         perm_vent: float = 10.0,
         inj_rate: float = 2000.0,
-        cap_scale: float = None
+        cap_scale: float = None,
+        vk: bool = False
     ) -> None:
         """Parameters
 
@@ -46,6 +47,8 @@ class PARAMS:
 
         # cap properties
         self.CAP_SCALE: float = cap_scale
+
+        self.VK: bool = vk
 
 
 
