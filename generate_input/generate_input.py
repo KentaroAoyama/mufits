@@ -1435,7 +1435,8 @@ def generate_input(
 
         # NEWTON #!
         __write("NEWTON")
-        __write("1   2   2 /")  # 1, 3, 3 ?
+        # __write("1   2   2 /")  # 1, 3, 3 ?
+        __write("1   5   5 /")
         __write("")
 
         # SRCINJE
@@ -1465,7 +1466,6 @@ def generate_input(
             ts_max = 1.0
         if params.INJ_RATE > 10000.0:
             ts_max = 1.0
-            # TMULT = 2.0
         if tuning_params is not None:
             ts_max = tuning_params[1]
         time_rpt = 0.0
@@ -1492,12 +1492,11 @@ def generate_input(
             __write(f"    {time_rpt} /")
             __write("")
             years_total += tstep_rpt / 365.25
-            # tmult_tmp = TMULT - 0.01 * max(log10(params.VENT_SCALE), log10(params.INJ_RATE))
-            # if tmult_tmp > 0.0: #!
-            #     ts *= tmult_tmp #!
-            # else:
-            #     ts *= TMULT
-            ts *= TMULT
+            tmult: float = TMULT
+            if 1.0 <= time_rpt <= 180.0 and params.INJ_RATE > 10000.0:
+                ts = 50.0 / (24 * 60 * 60)
+                tmult = 1.0
+            ts *= tmult
 
         # REPORTS
         __write("REPORTS")
@@ -1553,28 +1552,36 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
     with open(refpth, "r") as f:
         lines = f.readlines()
 
-    ln_insert = None
+    ln_insert_props = None
+    ln_insert_tuning = None
     for i, l in enumerate(lines):
         if "OPERAREG" in l:
             for j in range(i + 1, i + 1000):
                 if "/\n" in lines[j] and lines[j + 1] == "/\n":
-                    ln_insert = j + 2
+                    ln_insert_props = j + 2
                     break
+        if "REPORTS" in l:
+            ln_insert_tuning = i - 1
+            break
 
-    trpt = 0.0
+    # find delete lines
     delete_index = set()
     for i, l in enumerate(lines):
         if "TUNING" in l:
-            if trpt > TEND_UNREST:
-                delete_index.update([i, i + 1, i + 2, i + 3])
-                continue
-            trpt += TRPT_UNREST
-            lines[i + 1] = f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n"
-            lines[i + 3] = f"    {trpt} /\n"
-    lines = [lines[i] for i in range(len(lines)) if i not in delete_index]
+            delete_index.update([i, i + 1, i + 2, i + 3])
+            continue
+        if "TEMPC\n" in l:
+            delete_index.update([i, i + 1])
+        if "PRES\n" in l:
+            delete_index.update([i, i + 1])
+        if "COMP1T\n" in l:
+            delete_index.update([i, i + 1])
+    # lines = [lines[i] for i in range(len(lines)) if i not in delete_index]
     with open(tpth, "w") as f:
         for ln, line in enumerate(lines):
-            if ln == ln_insert:
+            if ln in delete_index:
+                continue
+            if ln == ln_insert_props:
                 # TEMPC
                 f.write("\n")
                 f.write("TEMPC\n")
@@ -1602,6 +1609,16 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
                 _str += "  /\n"
                 f.write(_str)
                 f.write("\n")  # \n
+            
+            if ln == ln_insert_tuning:
+                time = 0.0
+                while time < TEND_UNREST:
+                    time += TRPT_UNREST
+                    f.write(f"TUNING\n")
+                    f.write(f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n")
+                    f.write(f"TIME\n")
+                    f.write(f"    {time} /\n")
+                    f.write(f"\n")
 
             f.write(line)
 
@@ -1627,8 +1644,6 @@ def generate_from_params(
         pth = Path(pth)
         # file path is assumed to be a subdirectory of the previous working directory
         dirpth = pth.parent.parent
-        print(f"pth: {pth}")
-        print(f"dirpth: {dirpth}")  #!
         for i in range(1000):
             iter_dir = dirpth.joinpath(f"ITER_{i}")
             if iter_dir.exists():
@@ -1649,8 +1664,8 @@ def generate_from_params(
                 fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
                 break
         if started:
-            print(f"fpth: {fpth}")  #!
-            print(f"pth: {pth}")  #!
+            print(f"refpth: {fpth}")  #!
+            print(f"runpth: {pth}")  #!
             nxyz = nxyz[0] * nxyz[1] * nxyz[2]
             cellid_props, _, time = load_sum(fpth)
             tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]

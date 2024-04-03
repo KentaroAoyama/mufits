@@ -210,7 +210,6 @@ def run_unrest(
         if i == 0 and not fpth.exists():
             raise
         elif fpth.exists():
-            fn = str(i - 1).zfill(4)
             refpth = simdir.joinpath(f"tmp.{fn}.SUM")
         else:
             break
@@ -282,7 +281,7 @@ def run_unrest(
 
 
 if __name__ == "__main__":
-    search_conditions(8, False, True)
+    # search_conditions(4, False, False, True)
     # run_single_condition(
     #     900.0, 0.1, 1000.0, 10.0, 1.0, r"E:\tarumai2", False, True, True
     # )
@@ -303,11 +302,5 @@ if __name__ == "__main__":
     #     900.0, 0.1, 1000.0, 10000.0, None, r"E:\tarumai2", False, False, True
     # )
 
-    # run_unrest(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v", 1)
-    # run_unrest(r"E:\tarumai2\900.0_0.1_10000.0_10000.0_1.0_v", 1)
-    # run_unrest(r"E:\tarumai2\900.0_0.1_1000.0_10000.0_100000.0_v", 2)
-    # run_unrest(r"E:\tarumai2\900.0_0.1_10000.0_10000.0_v", 1)
-    # run_unrest(r"E:\tarumai2\900.0_0.1_1000.0_10000.0_v", 2)
-    # run_unrest(r"E:\tarumai2\900.0_0.0_10000.0_10.0_1.0_v", 2)
-    # run_unrest(r"E:\tarumai2\900.0_0.0_10000.0_10000.0_100000.0_v", 1)
+    run_single_condition(900.0, 0.1, 15000.0, 10.0, 100000.0, r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest", True, True, True)
     pass

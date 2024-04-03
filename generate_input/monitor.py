@@ -543,6 +543,25 @@ def plt_warning_tstep(dirpth: PathLike) -> None:
     fig.savefig(dirpth.joinpath("warning_tstep.png"), dpi=200, bbox_inches="tight")
 
 
+
+def plt_progress_rate(dirpth: PathLike) -> None:
+    dirpth = Path(dirpth)
+    logpth = dirpth.joinpath("log.txt")
+    days, line_ls = [], []
+    with open(logpth, "r") as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if "TIME REPORT. STEP" in line:
+                m = re.search(r"\d+\.\d+ DAYS", lines[i + 1])
+                days.append(float(m.group().replace(" DAYS", "")))
+                line_ls.append(i)
+    fig, ax = plt.subplots()
+    ax.plot(line_ls, days)
+    ax.set_xlabel("LINES")
+    ax.set_ylabel("DAYS")
+    fig.savefig(dirpth.joinpath("progress_rate.png"), dpi=200, bbox_inches="tight")
+
+
 def plt_latests(
     cond_dir: Path,
     axes: Tuple[str] = ("Y",),
@@ -783,30 +802,30 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
 
-    pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\tmp.0013.SUM"
+    # pth = r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_1\tmp.0000.SUM"
     # plot_results(
     #     pth, ("Y"), False, None, None, ["FLUXK#E",]
-    # )  # ← ここから
-    plot_results(
-        pth,
-        ("Y"),
-        False,
-        10.0,
-        500.0,
-        [
-            "TEMPC",
-        ],
-    )  # ← ここから
-    plot_results(
-        pth,
-        ("Y"),
-        False,
-        0.0,
-        1.0,
-        [
-            "SAT#GAS",
-        ],
-    )  # ← ここから
+    # )
+    # plot_results(
+    #     pth,
+    #     ("Y"),
+    #     False,
+    #     10.0,
+    #     500.0,
+    #     [
+    #         "TEMPC",
+    #     ],
+    # )
+    # plot_results(
+    #     pth,
+    #     ("Y"),
+    #     False,
+    #     0.0,
+    #     1.0,
+    #     [
+    #         "SAT#GAS",
+    #     ],
+    # )
     # plot_results(
     #     pth,
     #     ("Y"),
@@ -818,18 +837,19 @@ if __name__ == "__main__":
     #     ],
     # )  # ← ここから
 
-    pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v"
-    # # get_latest_fumarole_prop(pth, "TEMPC")
+    # pth = r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_3"
+    # get_latest_fumarole_prop(pth, "TEMPC")
     # # get_latest_fumarole_prop(pth, "FLUXK#E")
-    load_results_and_plt_conv(pth)
-    plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
-    plot_fumarole_props_foreach_tstep(pth)
-
-    # pth = r"E:\tarumai\900.0_0.1_10000.0_10.0_100000.0\unrest\900.0_0.1_30000.0_10.0_100000.0"
+    # # load_results_and_plt_conv(pth)
     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
     # plot_fumarole_props_foreach_tstep(pth)
 
-    # plt_warning_tstep(pth)
+    # pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v"
+    # # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
+    # plot_fumarole_props_foreach_tstep(pth)
+
+    # plt_warning_tstep(r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v")
+    # plt_progress_rate(r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v")
 
     # target_ls = (
     #     r"E:\tarumai4\900.0_0.001_1000.0_10.0",
@@ -858,7 +878,7 @@ if __name__ == "__main__":
     # print(calc_ijk(2142, 40, 40))
 
     # load_results_and_plt_conv(r"E:\tarumai\200.0_0.1_10000.0_10000.0_1.0")
-    # kill(31712, 15)
+    # kill(8176, 15)
     # load_results_and_plt_conv(r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0")
 
     # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0

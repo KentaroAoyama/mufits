@@ -3,7 +3,7 @@ tempe:
 comp1t:
 - "same"
 inj_rate:
-# - 10000.0
+- 10000.0
 - 15000.0
 # - 20000.0
 # - 30000.0
@@ -11,8 +11,8 @@ inj_rate:
 perm:
 - "same"
 cap_scale:
-# - "same"
+- "same"
 # - 1.0
-- 100000.0
+# - 100000.0
 vk:
 - True
