@@ -4,7 +4,8 @@
 """
 
 from functools import partial
-from typing import List, Tuple, Dict, TextIO, Callable
+from typing import List, Tuple, Dict, TextIO, Callable, Set
+from collections import OrderedDict
 from pathlib import Path
 from os import PathLike, makedirs, getcwd
 import pickle
@@ -848,7 +849,7 @@ def generate_input(
     surf_lateral: Dict,
     imperm_bounds: List[Tuple],
     sattab: Tuple,
-    src_props: Dict,
+    src_props: OrderedDict,
     sink_props: Dict,
     params: PARAMS,
     tuning_params: Dict,
@@ -869,6 +870,11 @@ def generate_input(
             "RUNSPEC   ################### RUNSPEC section begins here ######################"
         )
         __write("")  # \n
+        
+        # CFLCTRL #! TODO: TUNING消すべき？
+        # __write("CFLCTRL")
+        # __write("ON    0.8")
+        # __write("")  # \n
 
         # Enable FAST option
         __write("FAST")
@@ -973,7 +979,14 @@ def generate_input(
         # ※ typenum:  Cell type ID. Available values for grid blocks: 1 (default)- an ordinary block, 2 - an impermeable grid block in which only heat conduction equation is solved)
         # ※ actnum:  Activity flag. 0: cell is inactive (impermeable), 1 (default): cell is active, 2: cell is active but its parameters are fixed
         __write("BOUNDARY                               We define the boundaries:")
-        srci, srcj, srck = src_props["i"], src_props["j"], src_props["k"]
+        magmasrc_idx: Set[Tuple] = set()
+        for i, (_, _dct) in enumerate(src_props.items()):
+            srci, srcj, srck = _dct["i"], _dct["j"], _dct["k"]
+            # NOTE: Implicitly assumes the source is at the bottom.
+            __write(
+                f"   {100 + i}   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
+            )
+            magmasrc_idx.add((srci, srcj, srck))
         # __write(f"   2   6* 'I-'  'I+'  'J-'  'J+'  2* INFTHIN /    <- Aquifer")
         # __write(
         #     f"   3   6* 'K-'  5*                   INFTHIN   4* 1* 2 /    <- Top boundary"
@@ -981,10 +994,6 @@ def generate_input(
         # __write(
         #     f"   102   6* 'K+'  5*                   INFTHIN   4* 2  2 /    <- Bottom boundary"
         # )
-        # NOTE: Implicitly assumes the source is at the bottom.
-        __write(
-            f"   100   {srci} {srci} {srcj} {srcj} {srck} {srck} 'K+'  5*                   INFTHIN   4* 2  2 /    <- MAGMASRC"
-        )
 
         # # Top boundary
         # for m, prop in top_bounds.items():
@@ -1069,7 +1078,7 @@ def generate_input(
 
         # bottom boundary
         for (i, j, k), prop in bottom_bounds.items():
-            if i == srci and j == srcj and k == srck:
+            if (i, j, k) in magmasrc_idx:
                 continue
             fluxnum = prop["FLUXNUM"]
             __write(
@@ -1082,7 +1091,9 @@ def generate_input(
         # SRCSPECG (MAGMASRC and RAINSRC)
         __write("SRCSPECG")
         # MAGMASRC
-        __write(f" ’MAGMASRC’ {srci} {srcj} {srck} /")
+        for name, prop in src_props.items():
+            srci, srcj, srck = prop["i"], prop["j"], prop["k"]
+            __write(f" ’{name}’ {srci} {srcj} {srck} /")
         # # FUMAROLE
         # for name, (sinki, sinkj, sinkk) in sink_props.items():
         #     __write(f" ’{name}’ {sinki + 1} {sinkj + 1} {sinkk + 1} /")
@@ -1278,9 +1289,12 @@ def generate_input(
         # __write(
         #     f"   PRES   {P_BOTTOM} FLUXNUM 102 /     The pressure of the bottom boundary"
         # )
-        __write(
-            f"TEMPC   {params.SRC_TEMP} FLUXNUM 100 /     The temperature of the MAGMASRC"
-        )
+        
+        for i, (_, prop) in enumerate(src_props.items()):
+            srctempe = prop["tempe"]
+            __write(
+                f"TEMPC   {srctempe} FLUXNUM {i + 100} /     The temperature of the MAGMASRC"
+            )
 
         # Top boundary conditions
         # for _, prop in top_bounds.items():
@@ -1391,10 +1405,11 @@ def generate_input(
         # EQUALNAM
         __write("EQUALNAM")
         # MAGMASRC
-        pres, tempe, comp1t = src_props["pres"], src_props["tempe"], src_props["comp1t"]
-        __write(f"  PRES {pres} ’MAGMASRC’ /")
-        __write(f"  TEMPC {tempe} ’MAGMASRC’/")
-        __write(f"  COMP1T {comp1t} ’MAGMASRC’/")
+        for name, prop in src_props.items():
+            pres, tempe, comp1t = prop["pres"], prop["tempe"], prop["comp1t"]
+            __write(f"  PRES {pres} ’{name}’ /")
+            __write(f"  TEMPC {tempe} ’{name}’/")
+            __write(f"  COMP1T {comp1t} ’{name}’/")
 
         # RAINSRC
         zc_ls = stack_from_0(gz)
@@ -1441,7 +1456,9 @@ def generate_input(
 
         # SRCINJE
         __write("SRCINJE")
-        __write(f"  ’MAGMASRC’ MASS 1* 50. 1* {params.INJ_RATE} /")
+        for name, prop in src_props.items():
+            injrate = prop["inj_rate"]
+            __write(f"  ’{name}’ MASS 1* 50. 1* {injrate} /") # MAGMASRC
         # FUMAROLE
         # for name, sink_rate in SINK_PARAMS.items():
         #     __write(f"  ’{name}’ MASS 1* 50. 1* -{sink_rate} /")
@@ -1493,9 +1510,9 @@ def generate_input(
             __write("")
             years_total += tstep_rpt / 365.25
             tmult: float = TMULT
-            if 1.0 <= time_rpt <= 180.0 and params.INJ_RATE > 10000.0:
-                ts = 50.0 / (24 * 60 * 60)
-                tmult = 1.0
+            # if 1.0 <= time_rpt <= 180.0 and params.INJ_RATE > 10000.0:
+            #     ts = 50.0 / (24 * 60 * 60) #!
+            #     tmult = 1.0
             ts *= tmult
 
         # REPORTS
@@ -1641,17 +1658,18 @@ def generate_from_params(
     nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
     # modify tempe_ls, pres_ls, xco2_ls
     if continue_from_latest:
+        # pth: ../ITER_i/tmp.RUN
         pth = Path(pth)
         # file path is assumed to be a subdirectory of the previous working directory
         dirpth = pth.parent.parent
-        for i in range(1000):
-            iter_dir = dirpth.joinpath(f"ITER_{i}")
-            if iter_dir.exists():
+        for i in range(1, 1000):
+            iter_dir = pth.parent.parent.joinpath(f"ITER_{i}")
+            if iter_dir.joinpath("tmp.RUN").exists():
                 dirpth = iter_dir
             else:
                 break
         started: bool = False
-        for i in range(100000):
+        for i in range(10000):
             fn = str(i).zfill(4)
             fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
             if i == 0 and not fpth.exists():
@@ -1660,7 +1678,7 @@ def generate_from_params(
             elif i == 0 and fpth.exists():
                 started = True
             elif not fpth.exists():
-                fn = fn = str(i - 1).zfill(4)
+                fn = str(i - 1).zfill(4)
                 fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
                 break
         if started:
@@ -1769,14 +1787,37 @@ def generate_from_params(
     # for px, pv in zip(permx_ls, permz_ls):
     #     print(px, pv)
 
-    src_props = {
+    src_props: OrderedDict = OrderedDict()
+    src_props.setdefault("MAGM0", {
         "i": srcpos[0] + 1,
         "j": srcpos[1] + 1,
         "k": srcpos[2] + 1,
         "pres": params.PRES_SRC,
         "tempe": params.SRC_TEMP,
         "comp1t": params.SRC_COMP1T,
-    }
+        "inj_rate": params.INJ_RATE
+    })
+    if params.disperse_magmasrc:
+        src_props["MAGM0"]["inj_rate"] /= 5.0
+        for i in range(1, 5):
+            dx, dy = 1, 1  # python index to MUFITS index
+            if i == 1:
+                dx += 1
+            if i == 2:
+                dy += 1
+            if i == 3:
+                dx -= 1
+            if i == 4:
+                dy -= 1
+            src_props.setdefault(f"MAGM{i}", {
+                "i": srcpos[0] + dx,
+                "j": srcpos[1] + dy,
+                "k": srcpos[2] + 1,
+                "pres": params.PRES_SRC,
+                "tempe": params.SRC_TEMP,
+                "comp1t": params.SRC_COMP1T,
+                "inj_rate": params.INJ_RATE / 5.0
+            })
 
     # debug
     with open(Path(pth).parent.joinpath("debug.pkl"), "wb") as pkf:

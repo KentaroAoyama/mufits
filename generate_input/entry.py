@@ -43,6 +43,7 @@ def run_single_condition(
     from_latest: bool = False,
     ignore_convergence: bool = False,
     vk: bool = False,
+    disperse_magmasrc: bool = False,
 ) -> None:
     sim_dir: Path = condition_to_dir(
         base_dir,
@@ -52,7 +53,8 @@ def run_single_condition(
         perm_vent,
         cap_scale,
         from_latest,
-        vk
+        vk=vk,
+        disperse_magmasrc=disperse_magmasrc,
     )
     makedirs(sim_dir, exist_ok=True)
     if is_converged(sim_dir) and not ignore_convergence:
@@ -67,6 +69,7 @@ def run_single_condition(
         cap_scale=cap_scale,
         rain_unit=calc_infiltration() * 1000.0,
         vk=vk,
+        disperse_magmasrc=disperse_magmasrc,
     )
 
     runpth = sim_dir.joinpath("tmp.RUN")
@@ -99,6 +102,7 @@ def search_conditions(
     # NOTE: 1 for monitor
     pool = futures.ProcessPoolExecutor(max_workers=max_workers)
     conds_dct: OrderedDict[Future] = OrderedDict()
+    disp: bool = conditions["disperse_magmasrc"][0]
     cou = 0
     makedirs(base_dir, exist_ok=True)
     for temp in reversed(sorted(conditions["tempe"])):
@@ -119,7 +123,8 @@ def search_conditions(
                                 perm_vent,
                                 cap_scale,
                                 from_latest,
-                                vk
+                                vk,
+                                disp,
                             )
                             makedirs(sim_dir, exist_ok=True)
                             # run_single_condition(temp=temp, comp1t=comp1t, inj_rate=inj_rate, perm_vent=perm_vent, cap_scale=cap_scale, base_dir=base_dir, from_latest=from_latest, ignore_convergence=ignore_convergence, vk=vk) #!
@@ -134,12 +139,15 @@ def search_conditions(
                                 from_latest=from_latest,
                                 ignore_convergence=ignore_convergence,
                                 vk=vk,
+                                disperse_magmasrc=disp,
                             )
 
                             # monitor
                             monitor_pth = sim_dir.joinpath("tmp")
                             makedirs(monitor_pth, exist_ok=True)
-                            logger = generate_logger(cou, monitor_pth.joinpath("log.txt"))
+                            logger = generate_logger(
+                                cou, monitor_pth.joinpath("log.txt")
+                            )
                             props: Dict = conds_dct.setdefault(
                                 (temp, comp1t, inj_rate, perm_vent), {}
                             )
@@ -161,8 +169,11 @@ def run_single_unrest(
     a: float,
     c: float,
     vk: bool,
+    disperse_magmasrc: bool,
 ):
-    simdir: Path = condition_to_dir(base_dir, temp, comp1t, q, a, c, vk=vk)
+    simdir: Path = condition_to_dir(
+        base_dir, temp, comp1t, q, a, c, vk=vk, disperse_magmasrc=disperse_magmasrc
+    )
     makedirs(simdir, exist_ok=True)
     params = PARAMS(
         temp_src=temp,
@@ -172,11 +183,14 @@ def run_single_unrest(
         cap_scale=c,
         vk=vk,
         rain_unit=calc_infiltration() * 1000.0,
+        disperse_magmasrc=disperse_magmasrc,
     )
     runpth = simdir.joinpath("tmp.RUN")
     # min, max, rptstep
     generate_from_params(
-        params, runpth, refpth=refpth, # tuning_params=(1.0e-4, 10.0 / 400.0, 10.0)
+        params,
+        runpth,
+        refpth=refpth,  # tuning_params=(1.0e-4, 10.0 / 400.0, 10.0)
     )
     exepth = cur_dir.joinpath("H64.EXE")
     logpth = simdir.joinpath("log.txt")
@@ -215,23 +229,18 @@ def run_unrest(
             break
     print(f"refpth: {refpth}")
     # obtain base condition
-    cond_ls = dir_to_condition(simdir)
-    cap_scale, vk = None, False
-    if len(cond_ls) == 6:
-        cap_scale = cond_ls[4]
-        vk = True
-    elif len(cond_ls) == 5 and isinstance(cond_ls[4], bool):
-        vk = cond_ls[4]
-    elif len(cond_ls) == 5:
-        cap_scale = cond_ls[4]
+    conds: Dict = dir_to_condition(simdir)
+
     default_cond = {
-        "tempe": cond_ls[0],
-        "comp1t": cond_ls[1],
-        "inj_rate": cond_ls[2],
-        "perm": cond_ls[3],
-        "cap_scale": cap_scale,
-        "vk": vk,
+        "tempe": conds["tempe"],
+        "comp1t": conds["comp1t"],
+        "inj_rate": conds["inj_rate"],
+        "perm": conds["perm"],
+        "cap_scale": conds["cap_scale"],
+        "vk": conds["vk"],
+        "disperse_magmasrc": conds["d"],
     }
+    disperse_magmasrc = conditions["disperse_magmasrc"]
     pool = futures.ProcessPoolExecutor(max_workers=max_workers)
     for tempe in sorted(conditions["tempe"]):
         if tempe == "same":
@@ -256,6 +265,8 @@ def run_unrest(
                                 and perm_vent == default_cond["perm"]
                                 and cap_scale == default_cond["cap_scale"]
                                 and vk == default_cond["vk"]
+                                and disperse_magmasrc
+                                == default_cond["disperse_magmasrc"]
                             ):
                                 continue
                             # run_single_unrest(base_dir,
@@ -275,32 +286,22 @@ def run_unrest(
                                 inj_rate,
                                 perm_vent,
                                 cap_scale,
-                                vk
+                                vk,
+                                disperse_magmasrc,
                             )
     pool.shutdown(wait=True)
 
 
 if __name__ == "__main__":
     # search_conditions(4, False, False, True)
-    # run_single_condition(
-    #     900.0, 0.1, 1000.0, 10.0, 1.0, r"E:\tarumai2", False, True, True
-    # )
-    # run_single_condition(
-    #     900.0, 0.1, 1000.0, 10.0, None, r"E:\tarumai2", False, True, True
-    # )
-    # run_single_condition(
-    #     900.0, 0.1, 1000.0, 10000.0, 1.0, r"E:\tarumai2", False, False, True
-    # )
-    # キャップなし
-    # run_single_condition(
-    #     900.0, 0.1, 10000.0, 10.0, None, r"E:\tarumai2", False, False, True
-    # )
-    # run_single_condition(
-    #     900.0, 0.1, 10000.0, 10000.0, None, r"E:\tarumai2", False, False, True
-    # )
-    # run_single_condition(
-    #     900.0, 0.1, 1000.0, 10000.0, None, r"E:\tarumai2", False, False, True
-    # )
-
-    run_single_condition(900.0, 0.1, 15000.0, 10.0, 100000.0, r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest", True, True, True)
+    
+    run_single_unrest(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest",
+                      r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\tmp.0057.SUM",
+                      900.0,
+                      0.1,
+                      15000.0,
+                      10.0,
+                      100000.0,
+                      True,
+                      True)
     pass

@@ -30,3 +30,5 @@ cap_scale:
 # - 100000.0
 vk:
 - True
+disperse_magmasrc:
+- False

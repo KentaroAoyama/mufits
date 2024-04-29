@@ -3,7 +3,7 @@ from os import PathLike, access, R_OK, path, makedirs, kill
 import struct
 from typing import List, Tuple, Dict, BinaryIO, Any, OrderedDict, Union
 from pathlib import Path
-from math import isnan, exp, log10
+from math import isclose, isnan, exp, log10
 from time import sleep, time
 from logging import Logger
 import re
@@ -12,7 +12,9 @@ from statistics import median, mean
 import numpy as np
 from pyproj import Transformer
 from matplotlib import pyplot as plt
+import cv2
 import pickle
+
 
 from constants import (
     CONVERSION_CRITERIA,
@@ -232,6 +234,7 @@ def plt_conv(time_ls, changerate_ls, fpth: PathLike):
     plt.close()
 
 
+# TODO: fix or delete
 def monitor_process(conds_dct: Dict[Tuple, Any]) -> Union[None, int]:
     # i, change_rate
     conds_status: Dict = {}
@@ -463,6 +466,7 @@ def is_converged(cond_dir: Path) -> bool:
     return False
 
 
+# TODO: fix or delete
 def optimize_tstep(sim_dir: PathLike):
     sim_dir: Path = Path(sim_dir)
     perm_dt: Dict = {}
@@ -709,6 +713,33 @@ def get_latest_fumarole_prop(
         for name, v in props.items():
             f.write(f"{name}: {v}\n")
 
+def get_fpth_in_timeseries(simdir, ignore_first: bool = False) -> List[Path]:
+    def __get_fpth_in_singledir(__dir) -> List[Path]:
+        __dir = Path(__dir)
+        __fpth_ls = []
+        for i in range(10000):
+            if ignore_first and i == 0:
+                continue
+            fn = str(i).zfill(4)
+            fpth = __dir.joinpath(f"tmp.{fn}.SUM")
+            if fpth.exists():
+                __fpth_ls.append(fpth)
+            else:
+                break
+        return __fpth_ls
+
+    simdir = Path(simdir)
+    fpth_ls: List = __get_fpth_in_singledir(simdir)
+
+    for i in range(1, 10000):
+        _dirpth = simdir.joinpath(f"ITER_{i}")
+        if _dirpth.exists():
+            fpth_ls.extend(__get_fpth_in_singledir(_dirpth))
+        else:
+            break
+    
+    return fpth_ls
+
 
 def plot_sum_foreach_tstep(
     simdir: PathLike,
@@ -722,29 +753,53 @@ def plot_sum_foreach_tstep(
         [20,],
     ),
     showtime: bool = False,
-    minmax: Tuple = ((20.0, 500.0),)
+    minmax: Tuple = ((20.0, 500.0),),
+    diff: bool = False,
 ):
     assert len(axes) == len(idx_ls)
     assert len(prop_names) == len(minmax)
     simdir = Path(simdir)
-    fpth_ls = []
-    for i in range(10000):
-        fn = str(i).zfill(4)
-        fpth = simdir.joinpath(f"tmp.{fn}.SUM")
-        if fpth.exists():
-            fpth_ls.append(fpth)
+    fpth_ls = get_fpth_in_timeseries(simdir)
     nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
     nxyz = nx * ny * nz
-    for fpth in fpth_ls:
-        cellid_props, _, time = load_sum(fpth)
+    time, time0 = 0.0, 0.0
+    itern0: str = None
+    v0_dct: Dict = {}
+    for i, fpth in enumerate(fpth_ls):
+        cellid_props, _, timetmp = load_sum(fpth)
+        m = re.search(r"ITER_\d+", str(fpth.parent))
+        if m is not None:
+            iterntmp = m.group()
+        # fix time
+        if m is None:
+            time0 = timetmp
+            time = timetmp
+        elif itern0 is None and m is not None:
+            time = time0 + timetmp
+            itern0 = iterntmp
+        elif itern0 != iterntmp:
+            time0 = time
+            itern0 = iterntmp
+            time = time0 + timetmp
+        else:
+            time = time0 + timetmp
         for j, prop_name in enumerate(prop_names):
             v_ls = get_v_ls(cellid_props, prop_name)[:nxyz]
-            for i, ax in enumerate(axes):
+            if diff:
+                if i == 0:
+                    v0_dct.setdefault(prop_name, v_ls)
+                if v0_dct.get(prop_name, None) is not None:
+                    v_ls = [v1 - v0 for v1, v0 in zip(v_ls, v0_dct.get(prop_name))]
+            for k, ax in enumerate(axes):
                 grid_x, grid_y, val_3d = generate_3darr(v_ls, ax)
                 time_dir = simdir.joinpath("tstep").joinpath(prop_name).joinpath(ax)
+                if diff:
+                    time_dir = time_dir.joinpath("diff")
                 makedirs(time_dir, exist_ok=True)
-                for idx in idx_ls[i]:
+                for idx in idx_ls[k]:
                     fpth = time_dir.joinpath(f"{time}_{idx}.png")
+                    if fpth.exists():
+                        continue
                     plt_single_cs(grid_x, grid_y, val_3d, idx, prop_name, showtime, minmax[j][0], minmax[j][1], fpth)
 
 
@@ -756,16 +811,35 @@ def plot_fumarole_props_foreach_tstep(
     calc_average: bool = True
 ):
     simdir = Path(simdir)
-    fpth_ls = []
-    for i in range(10000):
-        fn = str(i).zfill(4)
-        fpth = simdir.joinpath(f"tmp.{fn}.SUM")
-        if fpth.exists():
-            fpth_ls.append(fpth)
+    # fpth_ls = []
+    # for i in range(10000):
+    #     fn = str(i).zfill(4)
+    #     fpth = simdir.joinpath(f"tmp.{fn}.SUM")
+    #     if fpth.exists():
+    #         fpth_ls.append(fpth)
+    fpth_ls = get_fpth_in_timeseries(simdir)
 
     props: Dict = {}
+    time0, time = 0.0, 0.0
+    itern0: str = None
     for fpth in fpth_ls:
-        cellid_props, srcprops, time = load_sum(fpth)
+        cellid_props, srcprops, timetmp = load_sum(fpth)
+        m = re.search(r"ITER_\d+", str(fpth.parent))
+        if m is not None:
+            iterntmp = m.group()
+        # fix time
+        if m is None:
+            time0 = timetmp
+            time = timetmp
+        elif itern0 is None and m is not None:
+            time = time0 + timetmp
+            itern0 = iterntmp
+        elif itern0 != iterntmp:
+            time0 = time
+            itern0 = iterntmp
+            time = time0 + timetmp
+        else:
+            time = time0 + timetmp
         props_time: Dict = props.setdefault(time, {})
         for prop_name in prop_names:
             _prop = get_fumarole_prop(None, prop_name, calc_average, (cellid_props, srcprops, time))
@@ -790,6 +864,63 @@ def plot_fumarole_props_foreach_tstep(
             plt.close()
 
 
+def sanity_check(pth, prop_ls: List = ["TEMPC", "PRES", "COMP1T"]):
+    cellid_props, srcprops, timetmp = load_sum(pth)
+    nxyz = len(DXYZ[0]) * len(DXYZ[1]) * len(DXYZ[2])
+    badconds: List = []
+    for name in prop_ls:
+        _ls = get_v_ls(cellid_props, name)
+        _ls = _ls[:nxyz]
+        if name == "TEMPC":
+            if min(_ls) < 0.0:
+                badconds.append(f"min {name} < 0℃: {min(_ls)}")
+            if max(_ls) > 1000.0:
+                badconds.append(f"max {name} > 1000℃: {max(_ls)}")
+        if name == "PRES":
+            if min(_ls) < 0.1:
+                badconds.append(f"min {name} < 0.1 MPa: {min(_ls)}")
+            if max(_ls) > 150.0:
+                badconds.append(f"max {name} > 150 MPa: {max(_ls)}")
+        if name == "COMP1T":
+            if min(_ls) < 0.0:
+                badconds.append(f"min {name} < 0: {min(_ls)}")
+            if max(_ls) > 1.0:
+                badconds.append(f"max {name} > 1: {max(_ls)}")
+    print(badconds)
+    
+
+def img2mov(imgdir: PathLike, movdir: PathLike= None) -> None:
+    imgdir = Path(imgdir)
+    if movdir is None:
+        movdir = Path(imgdir)
+    movdir = Path(movdir)
+    idxdct: Dict = {}
+    for pth in imgdir.glob('**/*.png'):
+        fname = pth.name.replace(".png", "")
+        _ls: List = fname.split("_")
+        idxdct.setdefault(int(_ls[1]), []).append([float(_ls[0]), pth])
+        
+    for idx, _ls in idxdct.items():
+        time_ls = [_l[0] for _l in _ls]
+        pth_ls = [_l[1] for _l in _ls]
+        time_ls, pth_ls = zip(*sorted(zip(time_ls, pth_ls)))
+        img_ls: List = []
+        for j, (time, pth) in enumerate(zip(time_ls, pth_ls)):
+            img = cv2.imread(str(pth))
+            cv2.putText(img, str(time), (10, 50), cv2.FONT_HERSHEY_PLAIN, 3, (0, 0, 0), 3, 4)
+            height, width, layers = img.shape
+            if j == 0:
+                size = (width, height)
+            img_ls.append(img)
+        
+        codec = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(str(movdir.joinpath(f"{idx}.mp4")), codec, 30000/1001, size, 1)
+        for img in img_ls:
+            writer.write(img)
+        writer.release()
+
+
+
 from utils import calc_m, calc_press_air
 from constants import IDX_AIR, IDX_LAND, IDX_VENT, DXYZ
 
@@ -802,7 +933,7 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
 
-    # pth = r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_1\tmp.0000.SUM"
+    pth = r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\tmp.0028.SUM"
     # plot_results(
     #     pth, ("Y"), False, None, None, ["FLUXK#E",]
     # )
@@ -826,16 +957,16 @@ if __name__ == "__main__":
     #         "SAT#GAS",
     #     ],
     # )
-    # plot_results(
-    #     pth,
-    #     ("Y"),
-    #     False,
-    #     0.0,
-    #     10.0,
-    #     [
-    #         "PRES",
-    #     ],
-    # )  # ← ここから
+    plot_results(
+        pth,
+        ("Y"),
+        False,
+        0.0,
+        10.0,
+        [
+            "PRES",
+        ],
+    )  # ← ここから
 
     # pth = r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_3"
     # get_latest_fumarole_prop(pth, "TEMPC")
@@ -844,12 +975,32 @@ if __name__ == "__main__":
     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
     # plot_fumarole_props_foreach_tstep(pth)
 
-    # pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v"
-    # # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
+    # pth = r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v\ITER_1"
+    # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
     # plot_fumarole_props_foreach_tstep(pth)
 
-    # plt_warning_tstep(r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v")
-    # plt_progress_rate(r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v")
+    # unrestの進捗の可視化
+    # _ls = [r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v"]
+    # for pth in _ls:
+    #     print(pth)
+    #     # pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_1"
+    #     # TODO: plotがすでにある場合には途中から
+    #     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
+    #     # plot_fumarole_props_foreach_tstep(pth)
+    #     plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS", "PRES"], ([20,],), False, ((-100.0, 100.0), (-1.0, 1.0), (-5.0, 5.0)), True)
+    #     # plt_progress_rate(pth)
+    
+    # sanity_check(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_2\tmp.0019.SUM")
+
+    # img2mov(r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v\tstep\SAT#GAS\Y\diff",)
 
     # target_ls = (
     #     r"E:\tarumai4\900.0_0.001_1000.0_10.0",
@@ -878,8 +1029,11 @@ if __name__ == "__main__":
     # print(calc_ijk(2142, 40, 40))
 
     # load_results_and_plt_conv(r"E:\tarumai\200.0_0.1_10000.0_10000.0_1.0")
-    # kill(8176, 15)
+    # kill(19676, 15)
     # load_results_and_plt_conv(r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0")
 
     # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0
+
+    # _, _, time = load_sum(r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v\tmp.0363.SUM")
+    # print(time)
     pass

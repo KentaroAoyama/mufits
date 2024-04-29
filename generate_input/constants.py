@@ -317,7 +317,7 @@ T_GRAD_LAKE = 0.0
 T_GRAD_ROCK = 0.06
 
 # Time taken to reproduce steady state (in years)
-TIME_SS = 30 #!
+TIME_SS = 300 #!
 
 # Initial time step (in days)
 TSTEP_MIN = 1.0e-12
@@ -335,8 +335,8 @@ TMULT = 2.0 # 7 is optimum?
 
 # for SS (in days)
 TSTEP_UNREST = 50.0 / (24.0 * 60.0 * 60.0)
-TRPT_UNREST = 1.5 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
-TEND_UNREST = 30.0 * 365.25
+TRPT_UNREST = 10.0 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
+TEND_UNREST = 30.0
 
 # unrest or continue_from_latest
 # 以下Noneでデフォルト値 (NOTE: unrestを計算しないときは, Noneに設定する)

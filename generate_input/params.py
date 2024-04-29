@@ -14,7 +14,8 @@ class PARAMS:
         perm_vent: float = 10.0,
         inj_rate: float = 2000.0,
         cap_scale: float = None,
-        vk: bool = False
+        vk: bool = False,
+        disperse_magmasrc: bool = False
     ) -> None:
         """Parameters
 
@@ -49,6 +50,7 @@ class PARAMS:
         self.CAP_SCALE: float = cap_scale
 
         self.VK: bool = vk
+        self.disperse_magmasrc: bool = disperse_magmasrc
 
 
 
