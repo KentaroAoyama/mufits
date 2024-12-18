@@ -45,6 +45,26 @@ def run_single_condition(
     vk: bool = False,
     disperse_magmasrc: bool = False,
 ) -> None:
+    """Run MUFITS simulator in single condition 
+
+    Args:
+        temp (float): Source temperature (℃)
+        comp1t (float): Molar fraction of CO2 in source
+        inj_rate (float): Injected fluid rate from bottom (t/day)
+        perm_vent (float): Permeability ratio: conduit / host rock
+        cap_scale (float): Permeability ratio: (cap rock top) / (default cap rock: 10^-17)
+            If None, cap rock is not set.
+        base_dir (PathLike): Parent directory of each condition (.../{base_dir}/{condition})
+        from_latest (bool, optional): Controls whether to compute from latest 
+            SUM file or not (True: compute from latest SUM file)
+        ignore_convergence (bool, optional): By default, directory that contains
+            convergenced result is skipped, but you can ignore it by setting this
+            parameter to True.
+        vk (bool, optional): Controls wheter to set high permeability only on 
+            Z-axis or not (True: high permeability will only be set on Z-axis).
+        disperse_magmasrc (bool, optional): Controls wheter to inject magmatic
+            fluid from multiple bottom blocks (True: inject from multiple blocks)
+    """
     sim_dir: Path = condition_to_dir(
         base_dir,
         temp,
@@ -96,6 +116,17 @@ def search_conditions(
     with_cap: bool = False,
     ignore_convergence: bool = False,
 ):
+    """Simulate MUFITS on multiple conditions written in ./conditions.yml
+
+    Args:
+        max_workers (int): Number of CPUs used for parallel computing
+        from_latest (bool): Controls whether to compute from latest 
+            SUM file or not (True: compute from latest SUM file)
+        with_cap (bool): Controls whether to consider cap rock or not 
+            (True: consider cap rock) 
+        ignore_convergence (bool): Controls whether to ignore directory
+            that already converged or not (True: ignore converged condition) 
+    """
     assert max_workers < cpu_count() - 1, max_workers
     with open(Path("./conditions.yml"), "r") as ymf:
         conditions: Dict = yaml.safe_load(ymf)
@@ -171,6 +202,23 @@ def run_single_unrest(
     vk: bool,
     disperse_magmasrc: bool,
 ):
+    """Calculate unrest phase
+
+    Args:
+        base_dir (PathLike): Parent directory of each condition 
+            (.../{base_dir}/{condition})
+        refpth (PathLike): Path of SUM file to be referenced. Parameters in
+            this file will be initial parameter of this unrest calculation. 
+        temp (float): Source temperature (℃)
+        comp1t (float): Molar fraction of CO2 in source
+        q (float): Injected fluid rate from bottom (t/day)
+        a (float): Permeability ratio: conduit / host rock
+        c (float): Permeability ratio: (cap rock top) / (default cap rock: 10^-17)
+        vk (bool): Controls wheter to set high permeability only on 
+            Z-axis or not (True: high permeability will only be set on Z-axis).
+        disperse_magmasrc (bool): Controls wheter to inject magmatic
+            fluid from multiple bottom blocks (True: inject from multiple blocks)
+    """
     simdir: Path = condition_to_dir(
         base_dir, temp, comp1t, q, a, c, vk=vk, disperse_magmasrc=disperse_magmasrc
     )
@@ -213,6 +261,13 @@ def run_unrest(
     simdir: PathLike,
     max_workers: int = cpu_count() - 5,
 ) -> None:
+    """Simulate MUFITS on multiple conditions written in ./conditions_unrest.yml
+
+    Args:
+        simdir (PathLike): Directory where results of steady state exist 
+            (e.g., .../900.0_0.0_100.0_10.0/)
+        max_workers (int): Number of CPUs used for parallel computing
+    """
     simdir = Path(simdir)
     base_dir = unrest_dir(simdir)
     with open(Path("./conditions_unrest.yml"), "r") as ymf:
@@ -294,14 +349,25 @@ def run_unrest(
 
 if __name__ == "__main__":
     # search_conditions(4, False, False, True)
+    run_single_condition(900.0,
+                         0.0,
+                         100.0,
+                         10.0,
+                         None,
+                         base_dir,
+                         False,
+                         True,
+                         True,
+                         False
+                         )
     
-    run_single_unrest(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest",
-                      r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\tmp.0057.SUM",
-                      900.0,
-                      0.1,
-                      15000.0,
-                      10.0,
-                      100000.0,
-                      True,
-                      True)
+    # run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest",
+    #                   r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\tmp.0028.SUM",
+    #                   900.0,
+    #                   0.0,
+    #                   15000.0,
+    #                   10.0,
+    #                   None,
+    #                   True,
+    #                   True)
     pass

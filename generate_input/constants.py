@@ -9,7 +9,8 @@ POS_SRC = (42.691753, 141.375653, -400.0)
 POS_SINK = {"A": (42.688814, 141.380509, 955.6),
             "B": (42.689230, 141.375933, 981.0),
             "E": (42.690010,141.376491, 989.5),
-            "G": (42.691461, 141.378561, 972.0)}
+            "G": (42.691461, 141.378561, 972.0),
+            "MIDDLE": (42.690480, 141.376786, 1035.3)}
 
 SINK_PARAMS = {"A": 200.0,
                "B": 34.29355281207131,
@@ -196,6 +197,18 @@ TEMPE_AIR = 10.0 # ℃
 DENS_ROCK = 2900.0
 # Water density (kg/m3)
 DENS_WATER = 1.0e3
+### Rock properties
+# HCONDCFX: Bulk thermal conductivity in X-axis (W/(m・K))
+# HCONDCFY: Bulk thermal conductivity in Y-axis (W/(m・K))
+# HCONDCFZ: Bulk thermal conductivity in Z-axis (W/(m・K))
+# PORO: Effective porosity (0―1)
+# PERMX: Intrinsic permeability in X-axis (m^2)
+# PERMY: Intrinsic permeability in Y-axis (m^2)
+# PERMZ: Intrinsic permeability in Z-axis (m^2)
+# DENS: Grain density (kg/m^3)
+# HC: Heat capacity of grain (kJ/(kg・℃))
+# TEMPC: Initial temperature (℃) (OUTDATED)
+# TEMPC: Initial molar fraction of CO2 (OUTDATED)
 TOPO_CONST_PROPS = {
     IDX_LAND: {
         "HCONDCFX": 2.0,
@@ -334,9 +347,9 @@ NDTEND = 400
 TMULT = 2.0 # 7 is optimum?
 
 # for SS (in days)
-TSTEP_UNREST = 50.0 / (24.0 * 60.0 * 60.0)
+TSTEP_UNREST = 1.0
 TRPT_UNREST = 10.0 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
-TEND_UNREST = 30.0
+TEND_UNREST = 30.0 * 365.25
 
 # unrest or continue_from_latest
 # 以下Noneでデフォルト値 (NOTE: unrestを計算しないときは, Noneに設定する)
@@ -344,7 +357,7 @@ TEND_UNREST = 30.0
 # TRPT_UNREST = 30.0 # in days unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TEND_UNREST = 30.0 # in years
 
-OUTDIR = r"E:\tarumai2"
+OUTDIR = r"F:\tarumai2"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

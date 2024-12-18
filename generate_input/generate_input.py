@@ -853,6 +853,7 @@ def generate_input(
     sink_props: Dict,
     params: PARAMS,
     tuning_params: Dict,
+    tend: float,
     fpth: PathLike,
 ):
     nx, ny = len(DXYZ[0]), len(DXYZ[1])
@@ -1486,9 +1487,8 @@ def generate_input(
         if tuning_params is not None:
             ts_max = tuning_params[1]
         time_rpt = 0.0
-        tend: float = TIME_SS
-        if TEND_UNREST is not None:
-            tend = TEND_UNREST
+        if tend is None:
+            tend = TIME_SS
         while years_total < tend:
             if ts > ts_max:
                 ts = ts_max
@@ -1652,7 +1652,7 @@ def generate_from_params(
     Args:
         params (PARAMS): Instance containing necessary parameters
         pth (PathLike): Path of RUN file.
-        load_from_latest (bool): Whether load from latest .SUM file or not
+        continue_from_latest (bool): Whether load from latest .SUM file or not
             (NOTE: file path is assumed to be a subdirectory of the previous working directory)
     """
     nxyz = (len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2]))
@@ -1761,13 +1761,14 @@ def generate_from_params(
     )
 
     imperm_bounds: List[Tuple] = generate_imperm_top_bc(m_airbounds)
-
+    tend = TIME_SS
     if refpth is not None:
         nxyz = nxyz[0] * nxyz[1] * nxyz[2]
         cellid_props, _, time = load_sum(refpth)
         tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
         pres_ls = get_v_ls(cellid_props, "PRES")[:nxyz]
         xco2_ls = get_v_ls(cellid_props, "COMP1T")[:nxyz]
+        tend = TEND_UNREST
     else:
         tempe_ls, pres_ls, xco2_ls = None, None, None
 
@@ -1863,6 +1864,7 @@ def generate_from_params(
         sinkpos,
         params,
         tuning_params,
+        tend,
         pth,
     )
 

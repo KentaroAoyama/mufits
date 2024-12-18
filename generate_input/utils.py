@@ -8,7 +8,7 @@ import numpy as np
 from scipy.integrate import quad
 import pickle
 from matplotlib import pyplot as plt
-import vtk
+# import vtk
 
 from constants import (
     DXYZ,
@@ -25,16 +25,47 @@ from constants import (
 
 
 def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
+    """Convert global index m to indecies in X-, Y-, and Z-direction (i, j, k)
+
+    Args:
+        m (int): Global index which indicates block id in 3d space.
+        nx (int): Total grid number in X-axis
+        ny (int): Total grid number in Y-axis
+
+    Returns:
+        Tuple[int]: Indecies in X-, Y-, and Z-direction (i, j, k)
+    """
     q, i = divmod(m, nx)
     k, j = divmod(q, ny)
     return i, j, k
 
 
 def calc_m(i: int, j: int, k: int, nx: int, ny: int) -> int:
+    """Calculate global index m from indeciex in X-, Y-, and Z-direction (i, j, k)
+
+    Args:
+        i (int): Index in X-direction
+        j (int): Index in Y-direction
+        k (int): Index in Z-direction
+        nx (int): Total grid number in X-axis
+        ny (int): Total grid number in Y-axis
+
+    Returns:
+        int: Global index which indicates block id in 3d space.
+    """
     return nx * ny * k + nx * j + i
 
 
 def stack_from_0(_ls: List[float]) -> List[float]:
+    """Generate a list containing the center coordinates of the grid from
+    the list containing the grid spacing. The element with index 0 is the origin.
+
+    Args:
+        _ls (List[float]): 1d list containing the grid spacing
+
+    Returns:
+        List[float]: 1d list containing the center coordinates of the grid
+    """
     c_ls = []
     for i, _d in enumerate(_ls):
         if len(c_ls) == 0:
@@ -45,6 +76,16 @@ def stack_from_0(_ls: List[float]) -> List[float]:
 
 
 def stack_from_center(_ls: List[float]) -> List[float]:
+    """Generate a list containing the center coordinates of the grid from
+    the list containing the grid spacing. The element whose index is in 
+    the center is assumed to be the origin.
+
+    Args:
+        _ls (List[float]): 1d list containing the grid spacing
+
+    Returns:
+        List[float]: 1d list containing the center coordinates of the grid
+    """
     n = len(_ls)
     if divmod(n, 2)[1] == 0:
         sum_left = -sum(_ls[: int(n * 0.5)])
@@ -79,9 +120,19 @@ def _kh_i(z: float, A: float, B: float) -> float:
 
 
 def calc_kh(z0: float, z1: float) -> float:
+    """Calculate combined permeability in horizontal axis assuming the
+    depth dependence of permeability reported in Manning and Ingebritsen (1999)
+
+    Args:
+        z0 (float): Elevation of lower limit of the layer (m)
+        z1 (float): Elevation of upper limit of the layer (m)
+
+    Returns:
+        float: Combined permeability (m^2)
+    """
     assert z1 > z0
-    A = 10.0**MIA
-    B = 10.0**MIB
+    # A = 10.0**MIA
+    # B = 10.0**MIB
     # return (_kh_i(z1, A, B) - _kh_i(z0, A, B)) / (z1 - z0) / 9.869233 * 1.0e16
     return quad(calc_k_z, z0, z1)[0] / (z1 - z0)
 
@@ -96,10 +147,20 @@ def _kv_i(z: float, A: float, B: float) -> float:
 
 
 def calc_kv(z0: float, z1: float) -> float:
+    """Calculate combined permeability in vertical axis assuming the
+    depth dependence of permeability reported in Manning and Ingebritsen (1999)
+
+    Args:
+        z0 (float): Elevation of lower limit of the layer (m)
+        z1 (float): Elevation of upper limit of the layer (m)
+
+    Returns:
+        float: Combined permeability (m^2)
+    """
     assert z1 > z0
-    A = 10.0**MIA
-    B = 10.0**MIB
-    bottom = (_kv_i(z1, A, B) - _kv_i(z0, A, B)) / (z1 - z0)
+    # A = 10.0**MIA
+    # B = 10.0**MIB
+    # bottom = (_kv_i(z1, A, B) - _kv_i(z0, A, B)) / (z1 - z0)
     # return 1.0 / bottom /  9.869233 * 1.0e16
     return (z1 - z0) / quad(_kz_inv, z0, z1)[0]
 
@@ -109,14 +170,35 @@ def condition_to_dir(
     tempe_src: float,
     comp1t: float,
     inj_rate: float,
-    pearm: float,
+    perm: float,
     cap_scale: float = None,
     from_latest: bool = False,
     vk: bool = False,
     disperse_magmasrc: bool = False,
 ) -> PathLike:
+    """Convert simulation condition to directory name
+
+    Args:
+        base_dir (PathLike): Parent directory of each condition 
+            (.../{base_dir}/{condition})
+        tempe_src (float): Source temperature (℃)
+        comp1t (float): Molar fraction of CO2 in source
+        inj_rate (float): Injected fluid rate from bottom (t/day)
+        perm (float): Permeability ratio: conduit / host rock
+        cap_scale (float): Permeability ratio: (cap rock top) / (default cap rock: 10^-17)
+            If None, cap rock is not set.
+        from_latest (bool): Controls whether to compute from latest 
+            SUM file or not (True: compute from latest SUM file)
+        vk (bool): Controls wheter to set high permeability only on 
+            Z-axis or not (True: high permeability will only be set on Z-axis).
+        disperse_magmasrc (bool): Controls wheter to inject magmatic
+            fluid from multiple bottom blocks (True: inject from multiple blocks)
+
+    Returns:
+        PathLike: Directory path containing single simulation condition
+    """
     base_dir = Path(base_dir)
-    name = f"{tempe_src}_{comp1t}_{inj_rate}_{pearm}"
+    name = f"{tempe_src}_{comp1t}_{inj_rate}_{perm}"
     if cap_scale is not None:
         name += f"_{cap_scale}"
     if vk:
@@ -134,12 +216,30 @@ def condition_to_dir(
 
 
 def unrest_dir(sim_dir: PathLike) -> Path:
+    """Generate directory containing unrest results
+
+    Args:
+        sim_dir (PathLike): Directory containing steady state results
+
+    Returns:
+        Path: Directory containing unrest results
+    """
     unrest_dir = Path(sim_dir).joinpath("unrest")
     makedirs(unrest_dir, exist_ok=True)
     return unrest_dir
 
 
 def dir_to_condition(cond_dir: PathLike) -> Dict[str, float]:
+    """Convert directory name to simulation condition
+    (assumed directory name was generated by condition_to_dir)
+
+    Args:
+        cond_dir (PathLike): Directory containing simulation results
+
+    Returns:
+        Dict[str, float]: Dictionary whose keys are condition name and 
+            values are parameter values.
+    """
     conds_str = str(Path(cond_dir).name).split("_")
     _dct: Dict = {}
     _dct.setdefault("temp", conds_str[0])
@@ -230,6 +330,16 @@ def calc_infiltration(
 def plt_topo(
     topo_ls: List, latc_ls: List, lngc_ls: List, nxyz: Tuple[int], savedir: PathLike
 ):
+    """Plot topology (elevation map) for debugging.
+
+    Args:
+        topo_ls (List): 1d list whose index is global index (m) and
+            value is rock type index (i.e., topology index in constants.py)
+        latc_ls (List): 2d list containing lalitute of grid center 
+        lngc_ls (List): 2d list containing longitude of grid center 
+        nxyz (Tuple[int]): Tuple containing total grid numbers for each axis 
+        savedir (PathLike): Save directory
+    """
     nx, ny, nz = nxyz
     topo_3d = np.zeros(shape=(nz, ny, nx)).tolist()
     for m, idx in enumerate(topo_ls):
@@ -435,10 +545,26 @@ def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
 
 
 def si2mdarcy(perm: float) -> float:
+    """Convert unit of permeability in SI to darcy
+
+    Args:
+        perm (float): Permeability in SI unit
+
+    Returns:
+        float: Permeability in darcy
+    """
     return perm / 9.869233 * 1.0e16
 
 
 def mdarcy2si(perm: float) -> float:
+    """Convert unit of permeability in darcy to SI
+
+    Args:
+        perm (float): Permeability in darcy
+
+    Returns:
+        float:  Permeability in SI unit
+    """
     return perm * 9.869233 * 1.0e-16
 
 
