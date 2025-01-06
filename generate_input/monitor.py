@@ -1,5 +1,5 @@
 """Load .SUM file and monitor processes"""
-from os import PathLike, access, R_OK, path, makedirs, kill
+from os import PathLike, access, R_OK, path, makedirs, kill, getcwd
 import struct
 from typing import List, Tuple, Dict, BinaryIO, Any, OrderedDict, Union
 from pathlib import Path
@@ -10,11 +10,15 @@ import re
 from statistics import median, mean
 
 import numpy as np
+import pandas as pd
 from pyproj import Transformer
 from matplotlib import pyplot as plt
+import matplotlib as mpl
 import cv2
 import pickle
+from tqdm import tqdm
 
+OBSDIR = Path(getcwd()).joinpath("obsdata")
 
 from constants import (
     CONVERSION_CRITERIA,
@@ -40,6 +44,18 @@ from utils import (
 
 ENCODING = "windows-1251"
 NX, NY, NZ = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
+
+def _prepare_ticks(plt: plt, axes: List[plt.Axes], params: Tuple = (7, 5, 7, 5), labelsize=14, inner: bool = False) -> None:
+    if inner:
+        plt.rcParams['xtick.direction'] = 'in'
+        plt.rcParams['ytick.direction'] = 'in'
+        plt.rcParams['axes.axisbelow'] = True
+    for ax in axes:
+        ax.tick_params(axis="x", which="major", length=params[0])
+        ax.tick_params(axis="x", which="minor", length=params[1])
+        ax.tick_params(axis="y", which="major", length=params[2])
+        ax.tick_params(axis="y", which="minor", length=params[3])
+        ax.tick_params(labelsize=labelsize)
 
 
 def read_Array(f: BinaryIO) -> Tuple[float, List]:
@@ -642,6 +658,7 @@ def load_results_and_plt_conv(dirpth: PathLike):
         time_ls, diff_ls = calc_change_rate(props_ls, prop_name)
         plt_conv(time_ls, diff_ls, dirpth.joinpath("tmp").joinpath(f"{prop_name}.png"))
 
+# TODO: 高速化
 def get_fumarole_prop(fpth: PathLike, prop_name: str, calc_average: bool = True, sumprops: Tuple = None):
     if sumprops is not None:
         cellid_props, _, time = sumprops
@@ -677,6 +694,8 @@ def get_fumarole_prop(fpth: PathLike, prop_name: str, calc_average: bool = True,
                     v *= -1
                 props.setdefault(name, v)
                 break
+    # add highest temperature point
+    props.setdefault("1819", v_ls[calc_m(18, 19, 0, nx, ny)])
     if calc_average:
         with open(
             Path.cwd().joinpath("analyse_dome_coords").joinpath("m_ls"), "rb"
@@ -803,26 +822,46 @@ def plot_sum_foreach_tstep(
                     plt_single_cs(grid_x, grid_y, val_3d, idx, prop_name, showtime, minmax[j][0], minmax[j][1], fpth)
 
 
+def get_obs_props(prop_names: List[str]) -> Dict:
+    # lim, 物性値のキー, 火口のキー
+    # suffix to mufits key in obsdata dir
+    suffix_mkey = {"tempe": "TEMPC",
+                   "height": "FLUXK#E"}
+    props: Dict[str, Dict] = {}
+    for fpth in OBSDIR.glob("*.csv"):
+        _name = fpth.name.replace(".csv", "")
+        fumarore, suffix = _name.split("_")
+        mkey = suffix_mkey[suffix]
+        if mkey in prop_names:
+            _dct: Dict = props.setdefault(mkey, {})
+            __dct: Dict = _dct.setdefault(fumarore, {})
+            _df = pd.read_csv(fpth)
+            columns = _df.columns.tolist()
+            __dct.setdefault(0, _df[columns[0]].tolist())
+            __dct.setdefault(1, _df[columns[1]].tolist())
+    return props
+
+
 def plot_fumarole_props_foreach_tstep(
     simdir: PathLike,
     prop_names: List[str] = [
         "TEMPC", "FLUXK#E"
     ],
-    calc_average: bool = True
+    calc_average: bool = True,
+    step: int = 1,
+    with_obs: bool = True, 
+    obs_props: Dict = None
 ):
     simdir = Path(simdir)
-    # fpth_ls = []
-    # for i in range(10000):
-    #     fn = str(i).zfill(4)
-    #     fpth = simdir.joinpath(f"tmp.{fn}.SUM")
-    #     if fpth.exists():
-    #         fpth_ls.append(fpth)
     fpth_ls = get_fpth_in_timeseries(simdir)
 
+    if with_obs and obs_props is None:
+        obs_props: Dict = get_obs_props(prop_names)
+    
     props: Dict = {}
     time0, time = 0.0, 0.0
     itern0: str = None
-    for fpth in fpth_ls:
+    for fpth in tqdm(fpth_ls[::step]):
         cellid_props, srcprops, timetmp = load_sum(fpth)
         m = re.search(r"ITER_\d+", str(fpth.parent))
         if m is not None:
@@ -848,6 +887,7 @@ def plot_fumarole_props_foreach_tstep(
     # plot
     savedir = simdir.joinpath("tstep").joinpath("fumarole")
     makedirs(savedir, exist_ok=True)
+    sim_dct: Dict = {}
     for prop_name in prop_names:
         time_ls = []
         name_v: Dict = {}
@@ -855,6 +895,9 @@ def plot_fumarole_props_foreach_tstep(
             time_ls.append(time)
             for name, v in _props[prop_name].items():
                 name_v.setdefault(name, []).append(v)
+        _dct: Dict = sim_dct.setdefault(prop_name, {})
+        _dct.setdefault("time", time_ls)
+        _dct.setdefault("name_v", name_v)
         for name, v_ls in name_v.items():
             fig, ax = plt.subplots()
             ax.plot(time_ls, v_ls)
@@ -862,6 +905,64 @@ def plot_fumarole_props_foreach_tstep(
             fig.savefig(figpth, dpi=200, bbox_inches="tight")
             plt.clf()
             plt.close()
+            
+    # with obs
+    if obs_props is None:
+        return
+    cmap = mpl.colormaps['viridis']
+    fls = ("1819", "A", "B")
+    name_color: Dict = {}
+    name_in_obs = []
+    for prop_name, dct in obs_props.items():
+        name_in_obs.extend(list(dct.keys()))
+    name_in_obs = list(set(name_in_obs))
+    names = list(set([*name_in_obs, *fls])) # TODO: setで色
+    for i, name in enumerate(names):
+        name_color.setdefault(name, cmap(i/len(names)))
+    for prop_name, fum_dct in obs_props.items():
+        isflux = False
+        if prop_name == "FLUXK#E":
+            isflux = True
+        fig, ax = plt.subplots()
+        if isflux:
+            ax2 = ax.twinx()
+            _prepare_ticks(plt, [ax, ax2], inner=True)
+        else:
+            _prepare_ticks(plt, [ax,], inner=True)
+        # obs
+        t_tmp = []
+        for name, values in fum_dct.items():
+            if isflux:
+                ax2.scatter(values[0], values[1], label=f"Obs: {name}", color=name_color[name])
+            else:
+                ax.scatter(values[0], values[1], label=f"Obs: {name}", color=name_color[name])
+            t_tmp.extend(values[0]) # time
+        # simulation results
+        strat = 1990.0 #!
+        props = sim_dct[prop_name]
+        for i, name in enumerate(fls):
+            if isflux:
+                name = "Sum"
+                name_color.setdefault(name, cmap(0))
+            time_ls = [t / 365.25 + strat for t in props["time"]]
+            ax.plot(time_ls, props["name_v"][name], label=f"Sim: {name}", color=name_color[name])
+            # before start
+            tls = np.linspace(min(t_tmp), strat, 200)
+            vls = np.full(tls.shape, props["name_v"][name][0])
+            ax.plot(tls, vls, color=name_color[name], linestyle="dashed")
+            if isflux:
+                break
+        # TODO: 目盛りとグラフとの間隔をあける
+        labelsize = 14
+        ax.set_xlim(min(tls) - 3.0, max((max(tls) + 30, max(time_ls))) + 3.0)
+        ax.set_xlabel("Year", fontsize=labelsize)
+        ax.set_ylabel(prop_name, fontsize=labelsize)
+        if isflux:
+            ax2.set_ylabel("Plume Height (m)", fontsize=labelsize)
+        ax.legend()
+        fig.savefig(savedir.joinpath(f"{prop_name}_withobs.png"), dpi=200, bbox_inches="tight")
+        plt.clf()
+        plt.close()
 
 
 def sanity_check(pth, prop_ls: List = ["TEMPC", "PRES", "COMP1T"]):
@@ -933,16 +1034,17 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
 
-    pth = r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\tmp.0028.SUM"
-    # plot_results(
-    #     pth, ("Y"), False, None, None, ["FLUXK#E",]
-    # )
+    pth = r"F:\tarumai2\900.0_0.1_100.0_10000.0_100000.0_v"
+    get_latest_fumarole_prop(pth)
+    # # plot_results(
+    # #     pth, ("Y"), False, None, None, ["FLUXK#E",]
+    # # )
     # plot_results(
     #     pth,
     #     ("Y"),
     #     False,
     #     10.0,
-    #     500.0,
+    #     300.0,
     #     [
     #         "TEMPC",
     #     ],
@@ -957,16 +1059,16 @@ if __name__ == "__main__":
     #         "SAT#GAS",
     #     ],
     # )
-    plot_results(
-        pth,
-        ("Y"),
-        False,
-        0.0,
-        10.0,
-        [
-            "PRES",
-        ],
-    )  # ← ここから
+    # plot_results(
+    #     pth,
+    #     ("Y"),
+    #     False,
+    #     0.0,
+    #     10.0,
+    #     [
+    #         "PRES",
+    #     ],
+    # )  # ← ここから
 
     # pth = r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_3"
     # get_latest_fumarole_prop(pth, "TEMPC")
@@ -979,61 +1081,42 @@ if __name__ == "__main__":
     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
     # plot_fumarole_props_foreach_tstep(pth)
 
-    # unrestの進捗の可視化
-    # _ls = [r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v",
-    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v",
-    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v",
-    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
-    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
-    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
-    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
-    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v",
-    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v"]
+    # # unrestの進捗の可視化
+    # _ls = [r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v_d",
+    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v_d",
+    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v_d",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v_d",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v_d"]
     # for pth in _ls:
     #     print(pth)
-    #     # pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_1"
-    #     # TODO: plotがすでにある場合には途中から
     #     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
-    #     # plot_fumarole_props_foreach_tstep(pth)
-    #     plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS", "PRES"], ([20,],), False, ((-100.0, 100.0), (-1.0, 1.0), (-5.0, 5.0)), True)
+    #     plot_fumarole_props_foreach_tstep(pth, step=50) #!
+    #     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS", "PRES"], ([20,],), False, ((-100.0, 100.0), (-1.0, 1.0), (-5.0, 5.0)), True)
     #     # plt_progress_rate(pth)
-    
-    # sanity_check(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_2\tmp.0019.SUM")
+    #     # # 動画作成
+    #     # tsep_dir = Path(pth).joinpath("tstep")
+    #     # for prop in ("SAT#GAS", "TEMPC", "PRES"):
+    #     #     for ax in ("X", "Y", "Z"):
+    #     #         figdir = tsep_dir.joinpath(prop).joinpath(ax)
+    #     #         if figdir.exists():
+    #     #             print(str(figdir))
+    #     #             img2mov(figdir)
+    #     #             diffpth = figdir.joinpath("diff")
+    #     #             if diffpth.exists():
+    #     #                 print(str(diffpth))
+    #     #                 img2mov(diffpth)
+    # # sanity_check(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_2\tmp.0019.SUM")
 
     # img2mov(r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v\tstep\SAT#GAS\Y\diff",)
 
-    # target_ls = (
-    #     r"E:\tarumai4\900.0_0.001_1000.0_10.0",
-    #     r"E:\tarumai4\900.0_0.001_1000.0_100.0",
-    #     r"E:\tarumai4\900.0_0.001_1000.0_1000.0",
-    #     r"E:\tarumai4\900.0_0.001_1000.0_10000.0",
-    #     r"E:\tarumai4\900.0_0.001_10000.0_10.0",
-    #     r"E:\tarumai4\900.0_0.001_10000.0_100.0",
-    #     r"E:\tarumai4\900.0_0.001_10000.0_1000.0",
-    #     r"E:\tarumai4\900.0_0.001_10000.0_10000.0",
-    #     r"E:\tarumai4\900.0_0.01_100.0_10.0",
-    #     r"E:\tarumai4\900.0_0.01_100.0_100.0",
-    #     r"E:\tarumai4\900.0_0.01_100.0_1000.0",
-    #     r"E:\tarumai4\900.0_0.01_100.0_10000.0",
-    # )
-    # target_ls = [i for i in Path(r"E:\tarumai4").iterdir()]
-    # for fpth in reversed(target_ls):
-    #     print(fpth)
-    #     plt_latests(fpth, show_time=False, vmin=10.0, vmax=100.0, prop_ls=["TEMPC"])
-
-    # 900.0_0.01_1000.0_1000.0から
-    # props_ls: List = load_props_ls(0, Path(r"E:\tarumai4\700.0_0.0_10000.0_1000.0"))
-    # for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
-    #     time_ls, changerate_ls = calc_change_rate(props_ls, metric)
-    #     plt_conv(time_ls, changerate_ls, rf"E:\tarumai4\700.0_0.0_10000.0_1000.0\tmp\{metric}.png")
-    # print(calc_ijk(2142, 40, 40))
-
     # load_results_and_plt_conv(r"E:\tarumai\200.0_0.1_10000.0_10000.0_1.0")
-    # kill(19676, 15)
+    # kill(6384, 15)
     # load_results_and_plt_conv(r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0")
 
     # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0
 
-    # _, _, time = load_sum(r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v\tmp.0363.SUM")
-    # print(time)
     pass
