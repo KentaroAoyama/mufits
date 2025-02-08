@@ -81,7 +81,6 @@ from constants import (
     TMULT,
     SINK_PARAMS,
     PERM_MAX,
-    TSTEP_UNREST,
     TRPT_UNREST,
     TEND_UNREST,
 )
@@ -1633,7 +1632,7 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
                     time += TRPT_UNREST
                     f.write(f"TUNING\n")
                     # f.write(f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n")  #!
-                    f.write(f"    1* {2000.0/3600.0/24.0}   1* {TSTEP_MIN} /\n")  #!タイムステップを小さくするなら、TRPTも小さくする
+                    f.write(f"    1* {250.0/3600.0/24.0}   1* {TSTEP_MIN} /\n")  #!タイムステップを小さくするなら、TRPTも小さくする
                     f.write(f"TIME\n")
                     f.write(f"    {time} /\n")
                     f.write(f"\n")
