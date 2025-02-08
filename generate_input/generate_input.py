@@ -1629,10 +1629,11 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
             
             if ln == ln_insert_tuning:
                 time = 0.0
-                while time < TEND_UNREST:
+                while time < TEND_UNREST * 365.25:
                     time += TRPT_UNREST
                     f.write(f"TUNING\n")
-                    f.write(f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n")
+                    # f.write(f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n")  #!
+                    f.write(f"    1* {2000.0/3600.0/24.0}   1* {TSTEP_MIN} /\n")  #!タイムステップを小さくするなら、TRPTも小さくする
                     f.write(f"TIME\n")
                     f.write(f"    {time} /\n")
                     f.write(f"\n")
@@ -1733,6 +1734,7 @@ def generate_from_params(
         with open("./analyse_crator_coords/crator.pkl", "rb") as pkf:
             crator_coords: Polygon = pickle.load(pkf)
         generate_simple_cap(topo_ls, xc_m, yc_m, 700.0, crator_coords)
+
     # debug
     # plt_topo(topo_ls, lat_2d, lng_2d, nxyz, "debug")
     actnum_ls = generate_act_ls(topo_ls)

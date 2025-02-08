@@ -137,7 +137,7 @@ def read_DATA(f: BinaryIO, no: int, props_ls: List, cellid_props: Dict) -> Dict:
     return cellid_props
 
 
-def load_sum(fpth: PathLike) -> Tuple[Dict, Dict, float]:
+def load_sum(fpth: PathLike, only_time=False) -> Tuple[Dict, Dict, float]:
     with open(fpth, "rb") as f:
         cellid_props: Dict = {}
         srcid_props: Dict = {}  # not load for now
@@ -158,6 +158,8 @@ def load_sum(fpth: PathLike) -> Tuple[Dict, Dict, float]:
                 # time value
                 b = f.read(8)
                 time = struct.unpack("d", b)[0]
+                if only_time:
+                    return time
                 b = f.read(8)
                 continue
             # Block CELLDATA
@@ -533,7 +535,7 @@ def optimize_tstep(sim_dir: PathLike):
     ax.set_xlabel("Mass Rate (t/day)")
     ax.set_ylabel("Maximum Time Step (day)")
     fig.savefig("tmp.png", dpi=300)
-    plt.show()
+    # plt.show()
     plt.clf()
     plt.close()
 
@@ -1020,6 +1022,22 @@ def img2mov(imgdir: PathLike, movdir: PathLike= None) -> None:
             writer.write(img)
         writer.release()
 
+def progress_time(dirpth):
+    fpth_ls = get_fpth_in_timeseries(dirpth)
+    simdirs = set()
+    simdirs.add(Path(dirpth))
+    for pth in fpth_ls:
+        if "ITER" in str(pth):
+            simdirs.add(Path(pth.parent))
+    time = 0.0
+    for _dirpth in list(simdirs):
+        for i in range(10000, -1, -1):
+            fn = str(i).zfill(4)
+            fpth = _dirpth.joinpath(f"tmp.{fn}.SUM")
+            if fpth.exists():
+                time += load_sum(fpth, only_time=True)
+                break
+    return time
 
 
 from utils import calc_m, calc_press_air
@@ -1034,23 +1052,24 @@ if __name__ == "__main__":
     #     if isnan(prop["PRES"]):
     #         print(i)
 
-    pth = r"F:\tarumai2\900.0_0.1_100.0_10000.0_100000.0_v"
-    get_latest_fumarole_prop(pth)
+    dirpth = r"E:\tarumai2\900.0_0.0_1000.0_10000.0_v\unrest\900.0_0.0_15000.0_10000.0_v_d\ITER_1"
+    # fpth = dirpth + r"\tmp.0064.SUM"    
+    # print(progress_time(dirpth) / 365.25)
     # # plot_results(
     # #     pth, ("Y"), False, None, None, ["FLUXK#E",]
     # # )
     # plot_results(
-    #     pth,
+    #     fpth,
     #     ("Y"),
     #     False,
     #     10.0,
-    #     300.0,
+    #     500.0,
     #     [
     #         "TEMPC",
     #     ],
     # )
     # plot_results(
-    #     pth,
+    #     fpth,
     #     ("Y"),
     #     False,
     #     0.0,
@@ -1060,7 +1079,7 @@ if __name__ == "__main__":
     #     ],
     # )
     # plot_results(
-    #     pth,
+    #     fpth,
     #     ("Y"),
     #     False,
     #     0.0,
@@ -1068,55 +1087,84 @@ if __name__ == "__main__":
     #     [
     #         "PRES",
     #     ],
-    # )  # ← ここから
+    # )
+    
+    # get_latest_fumarole_prop(dirpth, "TEMPC")
+    # get_latest_fumarole_prop(dirpth, "FLUXK#E")
+    
+    # plt_warning_tstep(dirpth)
 
     # pth = r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_3"
+    # pth = r"E:\tarumai2\900.0_0.0_100.0_10000.0_v"
     # get_latest_fumarole_prop(pth, "TEMPC")
+    # check_convergence_single(pth)
     # # get_latest_fumarole_prop(pth, "FLUXK#E")
     # # load_results_and_plt_conv(pth)
+    
+    # plot_sum_foreach_tstep(dirpth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
+    # plot_fumarole_props_foreach_tstep(dirpth)
+    # img2mov(dirpth + r"\tstep\TEMPC\Y",)
+    
+    # pth = r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_20000.0_10.0_100000.0_v_d"
     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
     # plot_fumarole_props_foreach_tstep(pth)
 
-    # pth = r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v\ITER_1"
-    # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
-    # plot_fumarole_props_foreach_tstep(pth)
-
-    # # unrestの進捗の可視化
-    # _ls = [r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v_d",
-    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v_d",
-    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v_d",
-    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
-    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
-    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
-    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v_d",
-    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v_d",
-    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v_d"]
+    # unrestの進捗の可視化
+    # _ls = [r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.1_1000.0_10.0_v\unrest\900.0_0.1_15000.0_10.0_v",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v",
+    #        r"E:\tarumai2\900.0_0.0_10000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v",
+    #        r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v"]
     # for pth in _ls:
     #     print(pth)
+    #     # pth = r"E:\tarumai2\900.0_0.1_1000.0_10.0_100000.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_1"
+    #     # TODO: plotがすでにある場合には途中から
     #     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS"], ([20,],), False, ((0.0, 500.0), (0.0, 1.0)))
-    #     plot_fumarole_props_foreach_tstep(pth, step=50) #!
-    #     # plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS", "PRES"], ([20,],), False, ((-100.0, 100.0), (-1.0, 1.0), (-5.0, 5.0)), True)
+    #     # plot_fumarole_props_foreach_tstep(pth)
+    #     plot_sum_foreach_tstep(pth, ("Y",), ["TEMPC", "SAT#GAS", "PRES"], ([20,],), False, ((-100.0, 100.0), (-1.0, 1.0), (-5.0, 5.0)), True)
     #     # plt_progress_rate(pth)
-    #     # # 動画作成
-    #     # tsep_dir = Path(pth).joinpath("tstep")
-    #     # for prop in ("SAT#GAS", "TEMPC", "PRES"):
-    #     #     for ax in ("X", "Y", "Z"):
-    #     #         figdir = tsep_dir.joinpath(prop).joinpath(ax)
-    #     #         if figdir.exists():
-    #     #             print(str(figdir))
-    #     #             img2mov(figdir)
-    #     #             diffpth = figdir.joinpath("diff")
-    #     #             if diffpth.exists():
-    #     #                 print(str(diffpth))
-    #     #                 img2mov(diffpth)
-    # # sanity_check(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_2\tmp.0019.SUM")
+    
+    # sanity_check(r"E:\tarumai2\900.0_0.1_10000.0_10.0_1.0_v\unrest\900.0_0.1_15000.0_10.0_100000.0_v\ITER_2\tmp.0019.SUM")
 
     # img2mov(r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_15000.0_10.0_100000.0_v\tstep\SAT#GAS\Y\diff",)
 
+    # target_ls = (
+    #     r"E:\tarumai4\900.0_0.001_1000.0_10.0",
+    #     r"E:\tarumai4\900.0_0.001_1000.0_100.0",
+    #     r"E:\tarumai4\900.0_0.001_1000.0_1000.0",
+    #     r"E:\tarumai4\900.0_0.001_1000.0_10000.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_10.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_100.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_1000.0",
+    #     r"E:\tarumai4\900.0_0.001_10000.0_10000.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_10.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_100.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_1000.0",
+    #     r"E:\tarumai4\900.0_0.01_100.0_10000.0",
+    # )
+    # target_ls = [i for i in Path(r"E:\tarumai4").iterdir()]
+    # for fpth in reversed(target_ls):
+    #     print(fpth)
+    #     plt_latests(fpth, show_time=False, vmin=10.0, vmax=100.0, prop_ls=["TEMPC"])
+
+    # 900.0_0.01_1000.0_1000.0から
+    # props_ls: List = load_props_ls(0, Path(r"E:\tarumai4\700.0_0.0_10000.0_1000.0"))
+    # for cou, (metric, criteria) in enumerate(CONVERSION_CRITERIA.items()):
+    #     time_ls, changerate_ls = calc_change_rate(props_ls, metric)
+    #     plt_conv(time_ls, changerate_ls, rf"E:\tarumai4\700.0_0.0_10000.0_1000.0\tmp\{metric}.png")
+    # print(calc_ijk(2142, 40, 40))
+
     # load_results_and_plt_conv(r"E:\tarumai\200.0_0.1_10000.0_10000.0_1.0")
-    # kill(6384, 15)
+    # kill(32468, 15)
     # load_results_and_plt_conv(r"E:\tarumai_tmp11\900.0_0.1_10000.0_10000.0")
 
     # TODO: 等方的な浸透率でもう一度 E:\tarumai4\200.0_0.1_100.0_1000.0
+
+    # _, _, time = load_sum(r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest\900.0_0.0_15000.0_10.0_v\tmp.0363.SUM")
+    # print(time)
 
     pass

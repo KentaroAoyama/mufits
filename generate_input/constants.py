@@ -6,12 +6,13 @@ from pathlib import Path
 ORIGIN = (42.690531, 141.376630, 955.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
 
+# OUTDATED
 POS_SINK = {"A": (42.688814, 141.380509, 955.6),
             "B": (42.689230, 141.375933, 981.0),
             "E": (42.690010,141.376491, 989.5),
             "G": (42.691461, 141.378561, 972.0),
             "MIDDLE": (42.690480, 141.376786, 1035.3)}
-
+# OUTDATED
 SINK_PARAMS = {"A": 200.0,
                "B": 34.29355281207131,
                "E": 17.55829903978051}
@@ -56,7 +57,7 @@ MIB = -3.2
 
 PERM_MAX: float = 1.0e-9
 
-# topology index
+# topology index (need not to be changed)
 IDX_LAND = 0
 IDX_SEA = 1
 IDX_LAKE = 2
@@ -69,10 +70,10 @@ IDX_CAPVENT = 6
 DEM_PTH = "./dem"
 SEADEM_PTH = "./seadem"
 CRS_RECT = "epsg:6680"
-RUNFILE_PTH = "tmp2.RUN"
+RUNFILE_PTH = "tmp2.RUN" # OUTDATED
 CACHE_DIR = Path.cwd().joinpath("cache")
-CACHE_DEM_FILENAME = "dem.pickle"
-CACHE_SEA_FILENAME = "sea.pickle"
+CACHE_DEM_FILENAME = "dem.pickle" # need not to be changed
+CACHE_SEA_FILENAME = "sea.pickle" # need not to be changed
 ALIGN_CENTER = True
 DXYZ = (
     [
@@ -220,8 +221,8 @@ TOPO_CONST_PROPS = {
         # "PERMZ": PERM_HOST,
         "DENS": DENS_ROCK,
         "HC": 1.0,
-        "TEMPC": 20.0,
-        "COMP1T": 3.25e-7,
+        "TEMPC": 20.0,      # OUTDATED
+        "COMP1T": 3.25e-7,  # OUTDATED
     },
     IDX_VENT: {
         "HCONDCFX": 2.0,
@@ -233,8 +234,8 @@ TOPO_CONST_PROPS = {
         # "PERMZ": 1000,
         "DENS": DENS_ROCK,
         "HC": 1.0,
-        "TEMPC": 20.0,
-        "COMP1T": 3.25e-7,
+        "TEMPC": 20.0,      # OUTDATED 
+        "COMP1T": 3.25e-7,  # OUTDATED
     },
     IDX_CAP: {
         "HCONDCFX": 2.0,
@@ -246,8 +247,8 @@ TOPO_CONST_PROPS = {
         # "PERMZ": 1000,
         "DENS": DENS_ROCK,
         "HC": 1.0,
-        "TEMPC": 20.0,
-        "COMP1T": 3.25e-7,
+        "TEMPC": 20.0,      # OUTDATED 
+        "COMP1T": 3.25e-7,  # OUTDATED
     },
     IDX_CAPVENT: {
         "HCONDCFX": 2.0,
@@ -259,8 +260,8 @@ TOPO_CONST_PROPS = {
         # "PERMZ": 1000,
         "DENS": DENS_ROCK,
         "HC": 1.0,
-        "TEMPC": 20.0,
-        "COMP1T": 3.25e-7,
+        "TEMPC": 20.0,      # OUTDATED 
+        "COMP1T": 3.25e-7,  # OUTDATED
     },
     IDX_SEA: {
         "HCONDCFX": 0.6,
@@ -272,8 +273,8 @@ TOPO_CONST_PROPS = {
         "PERMZ": 0.0,
         "DENS": 1020.0,
         "HC": 3.9,
-        "TEMPC": 20.0,
-        "COMP1T": 0.0,
+        "TEMPC": 20.0,   # OUTDATED 
+        "COMP1T": 0.0,   # OUTDATED
     },
     IDX_AIR: {
         "HCONDCFX": 0.0241,
@@ -285,8 +286,8 @@ TOPO_CONST_PROPS = {
         "PERMZ": 0.0,
         "DENS": 1.293,
         "HC": 1.007,
-        "TEMPC": TEMPE_AIR,
-        "COMP1T": 1.0,
+        "TEMPC": TEMPE_AIR,  # OUTDATED
+        "COMP1T": 1.0,       # OUTDATED
     },
     IDX_LAKE: {
         "HCONDCFX": 0.6,
@@ -298,13 +299,13 @@ TOPO_CONST_PROPS = {
         "PERMZ": 0.0,
         "DENS": 1000.0,
         "HC": 4.182,
-        "TEMPC": 10.0,
-        "COMP1T": 0.0,
+        "TEMPC": 10.0,  # OUTDATED
+        "COMP1T": 0.0,  # OUTDATED
     },
 }
 
 # Heat capacity of grain (Stissi et al., 2021; Hikcs et al., 2009 (10.1029/2008JB006198))
-HC_ROCK = 1.0
+HC_ROCK = 1.0  # OUTDATED
 
 # gravitational acceleration
 G = 9.80665
@@ -319,7 +320,7 @@ Kh = 0.104e4 * 1.013e-1 * 1.0e6  # NOTE: at 10℃, unit: Pa
 
 # Pressure gradient (MPa/m)
 P_GRAD_AIR = TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * 1.0e-6
-P_GRAD_SEA = TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * 1.0e-6
+P_GRAD_SEA = TOPO_CONST_PROPS[IDX_SEA]["DENS"] * G * 1.0e-6
 P_GRAD_LAKE = DENS_WATER * G * 1.0e-6
 P_GRAD_ROCK = DENS_WATER * G * 1.0e-6
 
@@ -336,7 +337,7 @@ TIME_SS = 300 #!
 TSTEP_MIN = 1.0e-12
 TSTEP_INIT = 1.0e-5
 # Maximum time step (days)
-TSTEP_MAX = 300.0 # not used
+TSTEP_MAX = 300.0 # OUTDATED
 # number of iterations for each TSTEP_MAX
 # 浸透率の異方性を入れる前：
 # NDTFIRST = 10
@@ -347,9 +348,9 @@ NDTEND = 400
 TMULT = 2.0 # 7 is optimum?
 
 # for SS (in days)
-TSTEP_UNREST = 1.0
-TRPT_UNREST = 10.0 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
-TEND_UNREST = 30.0 * 365.25
+TRPT_UNREST = 2000.0*400 / 24.0 / 3600.0 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
+# TRPT_UNREST = 1.0
+TEND_UNREST = 150.0
 
 # unrest or continue_from_latest
 # 以下Noneでデフォルト値 (NOTE: unrestを計算しないときは, Noneに設定する)

@@ -351,22 +351,22 @@ if __name__ == "__main__":
     # search_conditions(4, False, False, True)
     run_single_condition(900.0,
                          0.0,
-                         100.0,
-                         10.0,
+                         15000.0,
+                         10000.0,
                          None,
-                         base_dir,
+                         base_dir.joinpath("900.0_0.0_1000.0_10000.0_v").joinpath("unrest"),
+                         True,
                          False,
                          True,
                          True,
-                         False
                          )
     
-    # run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\unrest",
-    #                   r"E:\tarumai2\900.0_0.0_1000.0_10.0_v\tmp.0028.SUM",
+    # run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10000.0_v\unrest",
+    #                   r"E:\tarumai2\900.0_0.0_1000.0_10000.0_v\tmp.0286.SUM",
     #                   900.0,
     #                   0.0,
     #                   15000.0,
-    #                   10.0,
+    #                   10000.0,
     #                   None,
     #                   True,
     #                   True)
