@@ -1,308 +1,92 @@
+from typing import TypedDict, Optional, Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from enum import Enum, auto
 
-# ORIGIN = (42.690531, 141.376630, 1041.0)
-# A火口：315.9, -194.0
-# B火口：-58.6, -143.9
-ORIGIN = (42.690531, 141.376630, 955.0)
-POS_SRC = (42.691753, 141.375653, -400.0)
 
-# OUTDATED
-POS_SINK = {"A": (42.688814, 141.380509, 955.6),
-            "B": (42.689230, 141.375933, 981.0),
-            "E": (42.690010,141.376491, 989.5),
-            "G": (42.691461, 141.378561, 972.0),
-            "MIDDLE": (42.690480, 141.376786, 1035.3)}
-# OUTDATED
-SINK_PARAMS = {"A": 200.0,
-               "B": 34.29355281207131,
-               "E": 17.55829903978051}
+RUNFILENAME_PREFIX = "MIKASA"
+RUNFILENAME = RUNFILENAME_PREFIX + ".RUN"
+H64PTH = "H64.EXE"
+LICENSE_PTH = "LICENSE.LIC"
+EOSPTH = "CO2H2O_V3.0.EOS"
+LOGFILENAME = "log.txt"
 
-# lat0, lat1, lng0, lng1, Correction value (added to elevation value)
-LAKE_BOUNDS = {
-    "Shikotsu": (42.674796, 42.818721, 141.257462, 141.427571, -220.73 + 255.0)
-}
+DEM_CRS = "EPSG:6668"  # JGD2011（日本の測地系）
+GEO_CRS = "EPSG:6668"  # 地質図幅のCRS
+RECT_CRS = "EPSG:6680"
+XYZPTH = r"E:\mikasa_ccs\data\xyz\out.xyz"
+DEMPTH = r"E:\mikasa_ccs\data\dem"
+
+TOP = 400.0
+ORIGIN = (43.2574705, 141.9383815, TOP)
+class RockType(Enum):
+    LAND = auto()
+    AIR = auto()
+    CAP = auto()
+    COAL = auto()
+
+SUBSURFACE = set((RockType.LAND,
+                  RockType.CAP,
+                  RockType.COAL,))
+
+INNACTIVATE_ROCK_TYPES = set((RockType.AIR,))
+
+COAL_LAYER_NAME = "ikushumbetsu"
+COAL_LAYER_DATA_PTH = "./geology/ikushumbetsu_vertical"
+COAL_VERTICAL_SECTIONS = ("ABC", "DE", "KL", "MN", "OP", "QR")
+COAL_HORIZONTAL_DATA_PTH = ("./geology/ic0_1.csv","./geology/ic1_1.csv",)
 
 # rainfall (m / year)
-RAIN_AMOUNT = 1739.033333 * 1.0e-3
+# https://www.hro.or.jp/upload/3673/kenpo25-4.pdf
+# Last ten years average of total amount: https://www.data.jma.go.jp/stats/etrn/view/annually_s.php?prec_no=15&block_no=47413&year=&month=&day=&view=
+RAIN_AMOUNT = 1329.7 * 1.0e-3
 
-# evaporation rate (m /year)
-EVAP_AMOUNT = 435.7482143 * 1.0e-3
-
-# cross sectional area (m2), outflow height (m)
-RIVERS = {"Tomakomai": (25.4 * 1.0e6, 1805.6666 * 1.0e-3),
-          "Koitoi": (8.97 * 1.0e6, 2729.0 * 1.0e-3),
-          "Nishitappu": (24.11* 1.0e6, 1765.0 * 1.0e-3),
-          "Nishitappusawa": (8.65 * 1.0e6, 1166.6666 * 1.0e-3),
-          "Kumanosawa": (13.66 * 1.0e6, 854.0 * 1.0e-3),
-          "Oboppu": (9.79 * 1.0e6, 752.0 * 1.0e-3),
-          "Tarumai": (24.23 * 1.0e6, 1755.6666 * 1.0e-3)}
-
-# CRS of each toporogical data
-CRS_WGS84 = "epsg:4326"
-CRS_DEM = CRS_WGS84
-CRS_SEA = CRS_WGS84
-CRS_LAKE = CRS_WGS84
+# evaporation rate (80% of rainfall for now)(m /year)
+EVAP_AMOUNT = 1063.76 * 1.0e-3
 
 # resolution of each data
 RES_DEM = 10.0 * 10.0
-RES_SEA = 500.0 * 500.0  # https://www.jodc.go.jp/jodcweb/JDOSS/infoJEGG_j.html
-RES_LAKE = (
-    500.0
-    * 500.0  # TODO: currently same as sea, but maybe better to re-compile contour data
-)
 
 # parameters of Manning & Ingebritsen (1998)
 MIA = -14.0
 MIB = -3.2
 
+# Upper limit of permeability
 PERM_MAX: float = 1.0e-9
-
-# topology index (need not to be changed)
-IDX_LAND = 0
-IDX_SEA = 1
-IDX_LAKE = 2
-IDX_AIR = 3
-IDX_VENT = 4
-IDX_CAP = 5
-IDX_CAPVENT = 6
 
 # PATH
 DEM_PTH = "./dem"
 SEADEM_PTH = "./seadem"
-CRS_RECT = "epsg:6680"
-RUNFILE_PTH = "tmp2.RUN" # OUTDATED
 CACHE_DIR = Path.cwd().joinpath("cache")
 CACHE_DEM_FILENAME = "dem.pickle" # need not to be changed
 CACHE_SEA_FILENAME = "sea.pickle" # need not to be changed
+
 ALIGN_CENTER = True
-DXYZ = (
-    [
-        743.00834,
-        619.17362,
-        515.97802,
-        429.981696,
-        358.31808,
-        298.5984,
-        248.832,
-        207.36,
-        172.8,
-        144.0,
-        120.0,
-        100.0,
-        86.4,
-        72.0,
-        60.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        60.0,
-        72.0,
-        86.4,
-        100.0,
-        120.0,
-        144.0,
-        172.79999999999998,
-        207.35999999999999,
-        248.83199999999997,
-        298.59839999999997,
-        358.31807999999995,
-        429.98169599999994,
-        515.97802,
-        619.17362,
-        743.00834,
-    ],
-    [
-        743.00834,
-        619.17362,
-        515.97802,
-        429.981696,
-        358.31808,
-        298.5984,
-        248.832,
-        207.36,
-        172.8,
-        144.0,
-        120.0,
-        100.0,
-        86.4,
-        72.0,
-        60.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        60.0,
-        72.0,
-        86.4,
-        100.0,
-        120.0,
-        144.0,
-        172.79999999999998,
-        207.35999999999999,
-        248.83199999999997,
-        298.59839999999997,
-        358.31807999999995,
-        429.98169599999994,
-        515.97802,
-        619.17362,
-        743.00834,
-    ],
-    [
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
-        50.0,
+XCO2_AIR = 3.8e-4
+TEMP_RAIN = 10.0
+
+DXYZ = ([743.00834,619.17362,515.97802, 429.981696, 358.31808, 298.5984, 248.832, 207.36, 172.8, 144.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 144.0, 172.79999999999998, 207.35999999999999, 248.83199999999997, 298.59839999999997, 358.31807999999995, 429.98169599999994, 515.97802, 619.17362, 743.00834,],
+    [743.00834,619.17362,515.97802, 429.981696, 358.31808, 298.5984, 248.832, 207.36, 172.8, 144.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 144.0, 172.79999999999998, 207.35999999999999, 248.83199999999997, 298.59839999999997, 358.31807999999995, 429.98169599999994, 515.97802, 619.17362, 743.00834,],
+    [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
     ],
 )
 
-# Conctsnt parameters
+DXYZ = ([743.00834,619.17362,515.97802, 429.981696, 358.31808, 298.5984, 248.832, 207.36, 172.8, 144.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 144.0, 172.79999999999998, 207.35999999999999, 248.83199999999997, 298.59839999999997, 358.31807999999995, 429.98169599999994, 515.97802, 619.17362, 743.00834,],
+    [743.00834,619.17362,515.97802, 429.981696, 358.31808, 298.5984, 248.832, 207.36, 172.8, 144.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 120.0, 144.0, 172.79999999999998, 207.35999999999999, 248.83199999999997, 298.59839999999997, 358.31807999999995, 429.98169599999994, 515.97802, 619.17362, 743.00834,],
+    [50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0,
+    ],
+)
+
+# Constant/Default parameters
 # NOTE: unit of "HCONDCF" is W/(m・K), "PERM" is mD
-POROS = 0.2
+POROS = 0.1    # 三笠市 CO2地下固定研究事業受託コンソーシアム (2025) pp.29
 PERM_HOST = 1.0e-16 / 9.869233 * 1.0e16
-TEMPE_AIR = 10.0 # ℃
+TEMPE_AIR = 10.0 # ℃  NOTE: must be same as conditions.yml
 # Grain density (kg/m3)
-DENS_ROCK = 2900.0
+DENS_ROCK = 2700.0    # 三笠市 CO2地下固定研究事業受託コンソーシアム (2025) pp.29
 # Water density (kg/m3)
 DENS_WATER = 1.0e3
-### Rock properties
-# HCONDCFX: Bulk thermal conductivity in X-axis (W/(m・K))
-# HCONDCFY: Bulk thermal conductivity in Y-axis (W/(m・K))
-# HCONDCFZ: Bulk thermal conductivity in Z-axis (W/(m・K))
-# PORO: Effective porosity (0―1)
-# PERMX: Intrinsic permeability in X-axis (m^2)
-# PERMY: Intrinsic permeability in Y-axis (m^2)
-# PERMZ: Intrinsic permeability in Z-axis (m^2)
-# DENS: Grain density (kg/m^3)
-# HC: Heat capacity of grain (kJ/(kg・℃))
-# TEMPC: Initial temperature (℃) (OUTDATED)
-# TEMPC: Initial molar fraction of CO2 (OUTDATED)
-TOPO_CONST_PROPS = {
-    IDX_LAND: {
-        "HCONDCFX": 2.0,
-        "HCONDCFY": 2.0,
-        "HCONDCFZ": 2.0,
-        "PORO": POROS,
-        # "PERMX": PERM_HOST,
-        # "PERMY": PERM_HOST,
-        # "PERMZ": PERM_HOST,
-        "DENS": DENS_ROCK,
-        "HC": 1.0,
-        "TEMPC": 20.0,      # OUTDATED
-        "COMP1T": 3.25e-7,  # OUTDATED
-    },
-    IDX_VENT: {
-        "HCONDCFX": 2.0,
-        "HCONDCFY": 2.0,
-        "HCONDCFZ": 2.0,
-        "PORO": POROS,
-        # "PERMX": 1000,
-        # "PERMY": 1000,
-        # "PERMZ": 1000,
-        "DENS": DENS_ROCK,
-        "HC": 1.0,
-        "TEMPC": 20.0,      # OUTDATED 
-        "COMP1T": 3.25e-7,  # OUTDATED
-    },
-    IDX_CAP: {
-        "HCONDCFX": 2.0,
-        "HCONDCFY": 2.0,
-        "HCONDCFZ": 2.0,
-        "PORO": POROS,
-        # "PERMX": 1000,
-        # "PERMY": 1000,
-        # "PERMZ": 1000,
-        "DENS": DENS_ROCK,
-        "HC": 1.0,
-        "TEMPC": 20.0,      # OUTDATED 
-        "COMP1T": 3.25e-7,  # OUTDATED
-    },
-    IDX_CAPVENT: {
-        "HCONDCFX": 2.0,
-        "HCONDCFY": 2.0,
-        "HCONDCFZ": 2.0,
-        "PORO": POROS,
-        # "PERMX": 1000,
-        # "PERMY": 1000,
-        # "PERMZ": 1000,
-        "DENS": DENS_ROCK,
-        "HC": 1.0,
-        "TEMPC": 20.0,      # OUTDATED 
-        "COMP1T": 3.25e-7,  # OUTDATED
-    },
-    IDX_SEA: {
-        "HCONDCFX": 0.6,
-        "HCONDCFY": 0.6,
-        "HCONDCFZ": 0.6,
-        "PORO": 1.0,
-        "PERMX": 0.0,
-        "PERMY": 0.0,
-        "PERMZ": 0.0,
-        "DENS": 1020.0,
-        "HC": 3.9,
-        "TEMPC": 20.0,   # OUTDATED 
-        "COMP1T": 0.0,   # OUTDATED
-    },
-    IDX_AIR: {
-        "HCONDCFX": 0.0241,
-        "HCONDCFY": 0.0241,
-        "HCONDCFZ": 0.0241,
-        "PORO": 1.0,
-        "PERMX": 0.0,
-        "PERMY": 0.0,
-        "PERMZ": 0.0,
-        "DENS": 1.293,
-        "HC": 1.007,
-        "TEMPC": TEMPE_AIR,  # OUTDATED
-        "COMP1T": 1.0,       # OUTDATED
-    },
-    IDX_LAKE: {
-        "HCONDCFX": 0.6,
-        "HCONDCFY": 0.6,
-        "HCONDCFZ": 0.6,
-        "PORO": 0.9,
-        "PERMX": 0.0,
-        "PERMY": 0.0,
-        "PERMZ": 0.0,
-        "DENS": 1000.0,
-        "HC": 4.182,
-        "TEMPC": 10.0,  # OUTDATED
-        "COMP1T": 0.0,  # OUTDATED
-    },
-}
+DENS_AIR = 1.293
 
 # Heat capacity of grain (Stissi et al., 2021; Hikcs et al., 2009 (10.1029/2008JB006198))
 HC_ROCK = 1.0  # OUTDATED
@@ -312,39 +96,31 @@ G = 9.80665
 
 # Atmospheric pressure (MPa)
 P_TOP = 1.013e-1
-P_GROUND = P_TOP + TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * ORIGIN[2] * 1.0e-6
+P_GROUND = P_TOP + DENS_AIR * G * ORIGIN[2] * 1.0e-6
 
 # Henry's constant for CO2 gas to water
 # https://www.eng-book.com/pdfs/879040e33a05a0e5f1cb85580ef77ad1.pdf
 Kh = 0.104e4 * 1.013e-1 * 1.0e6  # NOTE: at 10℃, unit: Pa
 
 # Pressure gradient (MPa/m)
-P_GRAD_AIR = TOPO_CONST_PROPS[IDX_AIR]["DENS"] * G * 1.0e-6
-P_GRAD_SEA = TOPO_CONST_PROPS[IDX_SEA]["DENS"] * G * 1.0e-6
-P_GRAD_LAKE = DENS_WATER * G * 1.0e-6
+P_GRAD_AIR = DENS_AIR * 1.0e-6
 P_GRAD_ROCK = DENS_WATER * G * 1.0e-6
 
 # Temperature gradient (℃/m)
 T_GRAD_AIR = 0.0
-T_GRAD_SEA = 0.0
-T_GRAD_LAKE = 0.0
-T_GRAD_ROCK = 0.06
+T_GRAD_ROCK = 0.03
 
-# Time taken to reproduce steady state (in years)
-TIME_SS = 300 #!
+# Simulation time
+TIME_SS = 50.0
 
 # Initial time step (in days)
 TSTEP_MIN = 1.0e-12
-TSTEP_INIT = 1.0e-5
+TSTEP_INIT = 1.0e-3
 # Maximum time step (days)
-TSTEP_MAX = 300.0 # OUTDATED
+TSTEP_MAX = 10.0
 # number of iterations for each TSTEP_MAX
-# 浸透率の異方性を入れる前：
-# NDTFIRST = 10
-# NDTEND = 10
-# TMULT = 1.05
-NDTFIRST = 400
-NDTEND = 400
+NDTFIRST = 100
+NDTEND = 7
 TMULT = 2.0 # 7 is optimum?
 
 # for SS (in days)
@@ -358,12 +134,123 @@ TEND_UNREST = 150.0
 # TRPT_UNREST = 30.0 # in days unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TEND_UNREST = 30.0 # in years
 
-OUTDIR = r"F:\tarumai2"
+BASEDIR = r"E:\mikasa_ccs_sim"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,
                        "COMP1T": 1.0e-4,}
 CONDS_PID_MAP_NAME = "pid.txt"
+
+@dataclass
+class XY:
+    X: list[float]
+    Y: list[float]
+    def __iter__(self) -> Iterator[tuple[float, float]]:
+        assert len(self.X)==len(self.Y)
+        return ((self.X[i], self.Y[i]) for i in range(len(self.X)))
+    
+@dataclass
+class XYZ:
+    X: list[float]
+    Y: list[float]
+    Z: list[float]
+    def merge(self, xyz: 'XYZ') -> None:
+        self.X.extend(xyz.X)
+        self.Y.extend(xyz.Y)
+        self.Z.extend(xyz.Z)
+    def __iter__(self) -> Iterator[tuple[float, float]]:
+        assert len(self.X)==len(self.Y)==len(self.Z)
+        return ((self.X[i], self.Y[i], self.Z[i]) for i in range(len(self.X)))
+
+class RockProp(TypedDict):
+    PERMX: float
+    PERMY: float
+    PERMZ: float
+    HCONDCFX: float
+    HCONDCFY: float
+    HCONDCFZ: float
+    PORO: float
+    DENS: float
+    HC: float
+    TEMPC: Optional[float]
+    COMP1T: Optional[float]
+
+class RockProps(TypedDict):
+    NAME: RockProp
+
+class FluidProps(TypedDict):
+    TEMPC: float
+    PRES: float
+    COMP1T: float
+
+class WellProps(TypedDict):
+    WELL_ID: str
+    FLUID: FluidProps
+    INJE_RATE: float
+    INJE_UNIT: str
+    LATLNG_HEAD: tuple[float, float]
+    ULIM: float
+
+class Condition(TypedDict):
+    """
+    Simulation condition
+    """
+    SIM_ID: str                  # Simulation ID
+    ROCK_PROPS: RockProps         # Properties of rock
+    WELL_PROPS: WellProps        # Properties of well
+
+@dataclass
+class GeologicalData:
+    LAYER_NAME: str
+    BOTTOM: XYZ
+    TOP: XYZ
+    def merge(self, data: 'GeologicalData') -> None:
+        assert self.LAYER_NAME == data.LAYER_NAME, (self.LAYER_NAME, data.LAYER_NAME)
+        self.BOTTOM.merge(data.BOTTOM)
+        self.TOP.merge(data.TOP)
+
+
+# 石炭地質図, 地質図幅に引かれた地質断面の線がある範囲 (MIN, MAX)
+GEOLOGICAL_BBOX = ((141.80837563451777,43.02268009430514),
+                   (142.13762905524112,43.33337464625808))
+# 地質断面図から読み取った座標は(0,1)に規格化してあると想定しているが、その0が標高何メートルに対応するかを指定
+BOTTOM_VERTICAL_SECTION = 0.0
+
+# Diameter of well (in ft)
+D_WELL = 0.1968503937  # 6cm
+
+def massper2molper(xmass: float) -> float:
+    # xmol: Mass% of CO2
+    mco2 = 44.0
+    mh2o = 18.0
+    return mh2o*xmass / (mco2-(mco2-mh2o)*xmass)
+
+BHP_MAX = 1200
+
+TEMPC_INJ_FLUID = 10.0  # ℃
+
+# microbubble storage
+P_MB = 6.0  # MPa
+XCO2_MB = massper2molper(0.09)  # mol%
+INJ_RATE_MB = 24.0 * 24.0  # 24m3/h=576m3/day 
+INJ_UNIT_MB = "RATE"
+
+# super-critical state
+P_SC = 9.0     # MPa
+XCO2_SC = 1.0  # mol%
+INJ_RATE_SC = 2.0 * 24.0  # 2t/h=48t/day
+INJ_UNIT_SC = "MASS"
+
+# 幌内CCS基地
+HEAD_LATLNG_HORONAI_MB = (43.246391, 141.926022)
+HEAD_LATLNG_HORONAI_SC = (43.246328, 141.908813)
+# 奔別CCS基地
+HEAD_LATLNG_POMBETSU_MB = (43.268550, 141.950741)
+HEAD_LATLNG_POMBETSU_SC = (43.268550, 141.950741)
+
+# upper limit of well completion
+DEPTH_ULIM_MB = 400.0
+DEPTH_ULIM_SC = 800.0
 
 if __name__ == "__main__":
     pass
