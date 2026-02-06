@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional, Literal
 from pathlib import Path
 from os import PathLike, makedirs
 from math import log10, log
@@ -8,7 +8,8 @@ import numpy as np
 from scipy.integrate import quad
 import pickle
 from matplotlib import pyplot as plt
-# import vtk
+from pyproj import Transformer
+from shapely import Polygon, Point
 
 from constants import (
     DXYZ,
@@ -21,6 +22,13 @@ from constants import (
     RIVERS,
     MIA,
     MIB,
+    ORIGIN,
+    IDX_VENT,
+    IDX_CAP,
+    IDX_CAPVENT,
+    CRS_WGS84,
+    CRS_RECT,
+    DB
 )
 
 
@@ -175,6 +183,9 @@ def condition_to_dir(
     from_latest: bool = False,
     vk: bool = False,
     disperse_magmasrc: bool = False,
+    permf_cap: Optional[float] = None,
+    db: Optional[DB]=None,
+    pfail: Optional[float]=None
 ) -> PathLike:
     """Convert simulation condition to directory name
 
@@ -205,6 +216,12 @@ def condition_to_dir(
         name += "_v"
     if disperse_magmasrc:
         name += "_d"
+    if permf_cap is not None:
+        name += f"_dyn{permf_cap}"
+    if db is not None:
+        name += f"_{db}"
+    if pfail is not None:
+        name += f"_pf{pfail}"
     sim_dir = base_dir.joinpath(name)
     if not from_latest:
         return sim_dir
@@ -251,14 +268,31 @@ def dir_to_condition(cond_dir: PathLike) -> Dict[str, float]:
     if len(conds_str) > 4:
         if isinstance(conds_str[4], float):
             _dct["cap_scale"] = conds_str[4]
-    if "vk" in conds_str:
-        _dct.setdefault("vk", True)
-    else:
-        _dct.setdefault("vk", False)
-    if "d" in conds_str:
-        _dct.setdefault("d", True)
-    else:
-        _dct.setdefault("d", False)
+    for s in conds_str:
+        if "dyn" in s:
+            s = s.replace("dyn", "")
+            _dct.setdefault("permf_cap", float(s))
+        if s=="d":
+             _dct.setdefault("d", True)
+        if s=="v":
+            _dct.setdefault("vk", True)
+        if s == "duct":
+            _dct.setdefault("db", "duct")
+        if s == "brit":
+            _dct.setdefault("db", "brit")
+        if s == "db":
+            _dct.setdefault("db", "db")
+        if s == "ibrit":
+            _dct.setdefault("db", "ibrit")
+        if s == "idb":
+            _dct.setdefault("db", "idb")
+        if "pf" in s:
+            s = s.replace("pf", "")
+            _dct.setdefault("pfail", float(s))
+    _dct.setdefault("vk", False)
+    _dct.setdefault("d", False)
+    _dct.setdefault("db", None)
+    _dct.setdefault("pfail", None)
     return _dct
 
 
@@ -326,6 +360,52 @@ def calc_infiltration(
     rivers_total /= days
     return (rain_total - evap_total - rivers_total) / area
 
+def generate_simple_vent(
+    topo_ls: List, xc_m: List, yc_m: List, elvc_m: List, vent_bounds: Dict
+) -> List:
+    topo_arr: np.ndarray = np.array(topo_ls)
+    xc_m: np.ndarray = np.array(xc_m)
+    yc_m: np.ndarray = np.array(yc_m)
+    elvc_m: np.ndarray = np.array(elvc_m)
+    zc_ls = stack_from_0(DXYZ[2])
+    zc_arr = ORIGIN[2] - np.array(zc_ls)
+    for elvc, bounds in vent_bounds.items():
+        dz = DXYZ[2][np.argmin(np.square(zc_arr - elvc))]
+        filt = (
+            ((elvc - dz * 0.5) < elvc_m)
+            & (elvc_m < (elvc + dz * 0.5))
+            & (bounds[0] - 25.0 < xc_m)
+            & (xc_m < bounds[1] + 25.0)
+            & (bounds[2] - 25.0 < yc_m)
+            & (yc_m < bounds[3] + 25.0)
+        )
+        topo_arr = np.where(filt, IDX_VENT, topo_arr)
+    return topo_arr.tolist()
+
+
+def generate_simple_cap(
+    topo_ls: List,
+    xc_m: List,
+    yc_m: List,
+    elv_cap: float,
+    cap_bounds: Polygon,
+) -> List:
+    zc_ls = stack_from_0(DXYZ[2])
+    zc_arr = ORIGIN[2] - np.array(zc_ls)
+    k = np.argmin(np.square(zc_arr - elv_cap))
+    transformer_wgs = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
+    x0, y0 = transformer_wgs.transform(ORIGIN[1], ORIGIN[0])
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
+    for i in range(nx):
+        for j in range(ny):
+            m = calc_m(i, j, k, nx, ny)
+            xtmp = xc_m[m] + x0
+            ytmp = yc_m[m] + y0
+            if cap_bounds.contains(Point(xtmp, ytmp)):
+                topo_ls[m] = IDX_CAP
+                if topo_ls[calc_m(i, j, k - 1, nx, ny)] == IDX_VENT and k > 0:
+                    topo_ls[m] = IDX_CAPVENT
+    return topo_ls
 
 def plt_topo(
     topo_ls: List, latc_ls: List, lngc_ls: List, nxyz: Tuple[int], savedir: PathLike
@@ -435,29 +515,29 @@ def plt_airbounds(
         plt.close()
 
 
-def vtu_to_numpy(vtu_file_path):
-    reader = vtk.vtkXMLUnstructuredGridReader()
-    reader.SetFileName(vtu_file_path)
-    reader.Update()
+# def vtu_to_numpy(vtu_file_path):
+#     reader = vtk.vtkXMLUnstructuredGridReader()
+#     reader.SetFileName(vtu_file_path)
+#     reader.Update()
 
-    cell2point = vtk.vtkCellDataToPointData()
-    cell2point.SetInputData(reader.GetOutput())
-    cell2point.Update()
+#     cell2point = vtk.vtkCellDataToPointData()
+#     cell2point.SetInputData(reader.GetOutput())
+#     cell2point.Update()
 
-    data = cell2point.GetOutput()
-    points = data.GetPoints()
-    num_points = points.GetNumberOfPoints()
-    num_arrays = data.GetPointData().GetNumberOfArrays()
+#     data = cell2point.GetOutput()
+#     points = data.GetPoints()
+#     num_points = points.GetNumberOfPoints()
+#     num_arrays = data.GetPointData().GetNumberOfArrays()
 
-    coordinates = np.array([points.GetPoint(i) for i in range(num_points)])
+#     coordinates = np.array([points.GetPoint(i) for i in range(num_points)])
 
-    arrays = {}
-    for i in range(num_arrays):
-        array = data.GetPointData().GetArray(i)
-        array_name = array.GetName()
-        array_data = np.array([array.GetTuple(i) for i in range(num_points)])
-        arrays[array_name] = array_data
-    return coordinates, arrays
+#     arrays = {}
+#     for i in range(num_arrays):
+#         array = data.GetPointData().GetArray(i)
+#         array_name = array.GetName()
+#         array_data = np.array([array.GetTuple(i) for i in range(num_points)])
+#         arrays[array_name] = array_data
+#     return coordinates, arrays
 
 
 def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
@@ -567,34 +647,41 @@ def mdarcy2si(perm: float) -> float:
     """
     return perm * 9.869233 * 1.0e-16
 
+def calc_ximax(lamda: Optional[float]) -> float:
+    # ξmax(λ) in Afanasyev (2020) (pp.1657, below eq.16)
+    # based on Afanasyev (2020)
+    return 1.0
+
+def calc_eta(T: float, ignore_ulim: bool=False) -> float:
+    # η(T) in Afanasyev (2020) (eq.17, modified)
+    # based on Weis(2015); Afanasyev (2020)
+    Tb = 360.0
+    Td = 500.0
+    if T < Tb:
+        return 0.0
+    elif Tb <= T <= Td or ignore_ulim:
+        return (T - Tb) / (Td - Tb)
+    return 1.0
+
+def calc_D(lamda: float, T: float) -> float:
+    # -log D(λ, T) in Afanasyev (2020) (eq.17, modified)
+    # based on Afanasyev (2020)
+    a = 6.5
+    lamda_min = 0.3
+    eta = calc_eta(T, ignore_ulim=True)
+    coeff = 1.0
+    if lamda >= lamda_min:
+        coeff = (1.0-((lamda-lamda_min)/(1.0-lamda_min))**2)
+    return coeff * eta * a
+
+def calc_F(lamda: float, reversible: bool=True) -> float:
+    # F(T) in Afanasyev (2020) (eq.16) (coefficient is modified)
+    coeff = 1.0
+    if lamda < 1.0 and not reversible:
+        coeff = 0.0
+    elif lamda < 1.0:
+        coeff *= -1.0
+    return coeff * (lamda-1.0)**2
 
 if __name__ == "__main__":
-    # print(calc_ijk(14569  - 1, 40, 40))
-    # path = Path(r"E:\tarumai\200.0_0.0_1000.0_10.0").joinpath("tmp.0358.vtu")
-    # coordinates, arrays = vtu_to_numpy(str(path))
-    # result_dir = Path("./result/200.0_0.0_1000.0_10.0")
-    # for key, val in arrays.items():
-    #     if key in ("PHST", "SAT#GAS", "COMP2T"):
-    #         continue
-    #     print("===")
-    #     print(key)
-    #     outdir = result_dir.joinpath(key)
-    #     vlim = PARAMS_VTK.VLIM[key]
-    #     xlim = PARAMS_VTK.XLIM
-    #     ylim = PARAMS_VTK.YLIM
-    #     zlim = PARAMS_VTK.ZLIM
-    #     plt_result(val, coordinates, vlim[0], vlim[1], xlim, ylim, zlim, outdir)
-    # print(calc_k_z(25.0))
-    # print(calc_xco2_rain(1.0e5, 3.8e-4))
-    # print(calc_ijk(2811, 40, 40))
-    # print(mdarcy2si(1.0e9))
-    # print(P_GRAD_AIR)
-    # print(calc_infiltration() / RAIN_AMOUNT * 365.25)
-    # print(mdarcy2si(1013249.9658281449))
-    # q0 = 500.0 * 500.0 * 3.53 * 1.0e-3
-    # q1 = 10000.0
-    # print(q0)
-    # print((q0 * 10.0 + q1 * 900.0) / (q0 + q1))
-    # print(mdarcy2si(calc_kv(0.1, 1150.0)))
-    print(dir_to_condition("./900.0_0.1_100.0_100.0_100.0"))
     pass

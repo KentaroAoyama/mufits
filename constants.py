@@ -1,3 +1,4 @@
+from typing import Optional, Literal
 from pathlib import Path
 
 # ORIGIN = (42.690531, 141.376630, 1041.0)
@@ -304,6 +305,8 @@ TOPO_CONST_PROPS = {
     },
 }
 
+PERM_CAP = 1.0e-17
+
 # Heat capacity of grain (Stissi et al., 2021; Hikcs et al., 2009 (10.1029/2008JB006198))
 HC_ROCK = 1.0  # OUTDATED
 
@@ -330,27 +333,30 @@ T_GRAD_SEA = 0.0
 T_GRAD_LAKE = 0.0
 T_GRAD_ROCK = 0.06
 
-# Time taken to reproduce steady state (in years)
-TIME_SS = 300 #!
+# Simulation time (in years)
+TIME_END = 30.0
 
 # Initial time step (in days)
 TSTEP_MIN = 1.0e-12
-TSTEP_INIT = 1.0e-5
+TSTEP_INIT = 1000.0/(24.0*3600.0)
 # Maximum time step (days)
-TSTEP_MAX = 300.0 # OUTDATED
+TSTEP_MAX: Optional[float] = 1000.0/(24.0*3600.0) # 1.0
 # number of iterations for each TSTEP_MAX
 # 浸透率の異方性を入れる前：
 # NDTFIRST = 10
 # NDTEND = 10
 # TMULT = 1.05
-NDTFIRST = 400
-NDTEND = 400
+NDTFIRST = int(7.0/TSTEP_INIT)+1
+NDTEND = int(7.0/TSTEP_MAX)+1
 TMULT = 2.0 # 7 is optimum?
 
-# for SS (in days)
-TRPT_UNREST = 2000.0*400 / 24.0 / 3600.0 # unrestに限らず, 途中から計算しなおすときにこの間隔にする
+DB = Literal["db","duct","brit","idb","ibrit"]
+
+# Simulation time for unrest
+# TSTEP_UNREST = 100.0  # s
+# TRPT_UNREST = TSTEP_UNREST/(24.0*3600.0) # unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TRPT_UNREST = 1.0
-TEND_UNREST = 150.0
+# TEND_UNREST = 30.0
 
 # unrest or continue_from_latest
 # 以下Noneでデフォルト値 (NOTE: unrestを計算しないときは, Noneに設定する)
@@ -358,7 +364,7 @@ TEND_UNREST = 150.0
 # TRPT_UNREST = 30.0 # in days unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TEND_UNREST = 30.0 # in years
 
-OUTDIR = r"F:\tarumai2"
+OUTDIR = r"E:\tarumai2"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

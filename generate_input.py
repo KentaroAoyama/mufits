@@ -4,7 +4,7 @@
 """
 
 from functools import partial
-from typing import List, Tuple, Dict, TextIO, Callable, Set
+from typing import List, Tuple, Dict, TextIO, Callable, Set, Union, Optional, Literal
 from collections import OrderedDict
 from pathlib import Path
 from os import PathLike, makedirs, getcwd
@@ -34,6 +34,12 @@ from utils import (
     calc_xco2_rain,
     calc_kh,
     calc_kv,
+    calc_eta,
+    calc_D,
+    calc_F,
+    calc_ximax,
+    generate_simple_vent,
+    generate_simple_cap
 )
 
 from constants import (
@@ -65,6 +71,7 @@ from constants import (
     CACHE_SEA_FILENAME,
     TOPO_CONST_PROPS,
     TEMPE_AIR,
+    DENS_ROCK,
     G,
     P_GROUND,
     P_GRAD_AIR,
@@ -72,7 +79,7 @@ from constants import (
     P_GRAD_LAKE,
     P_GRAD_SEA,
     T_GRAD_ROCK,
-    TIME_SS,
+    TIME_END,
     TSTEP_INIT,
     TSTEP_MIN,
     TSTEP_MAX,
@@ -81,8 +88,8 @@ from constants import (
     TMULT,
     SINK_PARAMS,
     PERM_MAX,
-    TRPT_UNREST,
-    TEND_UNREST,
+    PERM_CAP,
+    DB,
 )
 
 from params import PARAMS, TUNING_PARAMS
@@ -125,7 +132,7 @@ def load_dem(pth_dem: PathLike) -> Tuple[List, List, List]:
     base_dir = Path(pth_dem)
     fpth = base_dir.joinpath("out.xyz")
     assert fpth.exists(), fpth
-    _df = pd.read_csv(fpth, sep="\s+", header=None)
+    _df = pd.read_csv(fpth, sep=" ", header=None)
     return _df[1].tolist(), _df[0].tolist(), _df[2].tolist()
 
 
@@ -133,7 +140,7 @@ def load_sea_dem(pth_seadem: PathLike) -> Tuple[List, List, List]:
     base_dir = Path(pth_seadem)
     lat_ls, lng_ls, elv_ls = [], [], []
     for pth in base_dir.glob("**/*"):
-        _df = pd.read_csv(pth, sep="\s+", header=None)
+        _df = pd.read_csv(pth, sep=" ", header=None)
         # first column indicates flag (interpolated value or not)
         lat_ls.extend(_df[1].to_list())
         lng_ls.extend(_df[2].to_list())
@@ -149,55 +156,6 @@ def __median(_ls: List) -> float:
 
 def __generate_rain_src_id(idx: int):
     return "R" + "{:07d}".format(idx)
-
-
-def generate_simple_vent(
-    topo_ls: List, xc_m: List, yc_m: List, elvc_m: List, vent_bounds: Dict
-) -> List:
-    topo_arr: np.ndarray = np.array(topo_ls)
-    xc_m: np.ndarray = np.array(xc_m)
-    yc_m: np.ndarray = np.array(yc_m)
-    elvc_m: np.ndarray = np.array(elvc_m)
-    zc_ls = stack_from_0(DXYZ[2])
-    zc_arr = ORIGIN[2] - np.array(zc_ls)
-    for elvc, bounds in vent_bounds.items():
-        dz = DXYZ[2][np.argmin(np.square(zc_arr - elvc))]
-        filt = (
-            ((elvc - dz * 0.5) < elvc_m)
-            & (elvc_m < (elvc + dz * 0.5))
-            & (bounds[0] - 25.0 < xc_m)
-            & (xc_m < bounds[1] + 25.0)
-            & (bounds[2] - 25.0 < yc_m)
-            & (yc_m < bounds[3] + 25.0)
-        )
-        topo_arr = np.where(filt, IDX_VENT, topo_arr)
-    return topo_arr.tolist()
-
-
-def generate_simple_cap(
-    topo_ls: List,
-    xc_m: List,
-    yc_m: List,
-    elv_cap: float,
-    cap_bounds: Polygon,
-) -> List:
-    zc_ls = stack_from_0(DXYZ[2])
-    zc_arr = ORIGIN[2] - np.array(zc_ls)
-    k = np.argmin(np.square(zc_arr - elv_cap))
-    transformer_wgs = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
-    x0, y0 = transformer_wgs.transform(ORIGIN[1], ORIGIN[0])
-    nx, ny = len(DXYZ[0]), len(DXYZ[1])
-    for i in range(nx):
-        for j in range(ny):
-            m = calc_m(i, j, k, nx, ny)
-            xtmp = xc_m[m] + x0
-            ytmp = yc_m[m] + y0
-            if cap_bounds.contains(Point(xtmp, ytmp)):
-                topo_ls[m] = IDX_CAP
-                if topo_ls[calc_m(i, j, k - 1, nx, ny)] == IDX_VENT and k > 0:
-                    topo_ls[m] = IDX_CAPVENT
-    return topo_ls
-
 
 def generate_topo(
     pth_dem: PathLike,
@@ -493,12 +451,12 @@ def generamte_rocknum_and_props(
                     permy_ls[m] = kh
                     permz_ls[m] = kv
                 elif _idx == IDX_CAP:
-                    v = si2mdarcy(1.0e-17)
+                    v = si2mdarcy(PERM_CAP)
                     permx_ls[m] = v
                     permy_ls[m] = v
                     permz_ls[m] = v
                 elif _idx == IDX_CAPVENT:
-                    v = fix_perm(si2mdarcy(1.0e-17 * cap_scale))
+                    v = fix_perm(si2mdarcy(PERM_CAP * cap_scale))
                     permx_ls[m] = v
                     permy_ls[m] = v
                     permz_ls[m] = v
@@ -743,6 +701,7 @@ def generamte_rocknum_and_props(
         rocknum_ls,
         (permx_ls, permy_ls, permz_ls),
         rocknum_params,
+        topo_rocknum_map,
         rocknum_ptgrad,
         tempe_ls,
         pres_ls,
@@ -754,6 +713,111 @@ def generamte_rocknum_and_props(
         surf_lateral,
     )
 
+DUCTAB = Tuple[List[Union[float, str]], List[float], List[List[float]]]
+
+def generate_cap_ducttab() -> DUCTAB:
+    t_ls = ["C", 360.0, 430.0, 500.0]
+    eta_ls = [calc_eta(t) for i, t in enumerate(t_ls) if i!=0]
+    l_ls = np.linspace(1.0, 0.0, 11).tolist()
+    l_d_map: List[List[float]] = []
+    for l in l_ls:
+        d_ls = [l]
+        for t in t_ls[1:]:
+            d_ls.append(calc_D(l, t))
+        l_d_map.append(d_ls)
+    return t_ls, eta_ls, l_d_map
+
+def generate_default_ducttab() -> DUCTAB:
+    t_ls = ["C", 360.0, 430.0, 500.0]
+    eta_ls = [calc_eta(t) for i, t in enumerate(t_ls) if i!=0]
+    l_ls = np.linspace(1.0, 0.0, 11).tolist()
+    l_d_map: List[List[float]] = []
+    for l in l_ls:
+        d_ls = [l]
+        for _ in t_ls[1:]:
+            d_ls.append(0.0)
+        l_d_map.append(d_ls)
+    return t_ls, eta_ls, l_d_map
+
+DYNFRTAB = List[List[float]]
+def generate_cap_dynfrtab(db: DB) -> DYNFRTAB:
+    lamda_ls = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99, 1.0, 1.01, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+    dynfrtab = []
+    reversible = True
+    if db in ("idb", "ibrit"):
+        reversible = False
+    for l in lamda_ls:
+        dynfrtab.append([l, 
+                         calc_F(l, reversible=reversible),
+                         calc_ximax(l)])
+    return dynfrtab
+
+def generate_default_dynfrtab() -> DYNFRTAB:
+    lamda_ls = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99, 1.0, 1.01, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0, 20.0, 30.0, 40.0, 100.0]
+    dynfrtab = []
+    for l in lamda_ls:
+        dynfrtab.append([l, 0.0, calc_ximax(l)])
+    return dynfrtab
+
+def generate_permfr(topo_ls: List[int], 
+                    permx_ls: List[float],
+                    permy_ls: List[float],
+                    permz_ls: List[float],
+                    permf: float,
+                    target_idx: List[int]) -> Tuple[List[float], List[float], List[float]]:
+    xfr, yfr, zfr = [], [], []
+    for m, idx in enumerate(topo_ls):
+        px, py, pz = permx_ls[m], permy_ls[m], permz_ls[m]
+        if idx in target_idx:
+            xfr.append(px*permf)
+            yfr.append(py*permf)
+            zfr.append(pz*permf)
+        else:
+            xfr.append(permx_ls[m])
+            yfr.append(permy_ls[m])
+            zfr.append(permz_ls[m])
+    return xfr, yfr, zfr
+
+def generate_pfail(topo_ls: List[int],
+                   idx_pfail: Optional[Dict[int, float]]) -> List[float]:
+    nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
+    p_fail_ls = list(range(nx*ny*nz))
+    for i in range(nx):
+        for j in range(ny):
+            d = 0.0
+            for k in range(nz):
+                m = calc_m(i,j,k,nx,ny)
+                idx = topo_ls[m]
+                if idx in (IDX_SEA, IDX_LAKE, IDX_AIR):
+                    p_fail_ls[m] = 1.0e20
+                    continue
+                dz = DXYZ[2][k]
+                dc = d + 0.5*dz
+                p_fail_ls[m] = 1000.0*G*dc*1.0e-6
+                if idx_pfail is not None:
+                    if idx in idx_pfail:
+                        p_fail_ls[m] = idx_pfail[idx]
+                d += dz
+    return p_fail_ls
+
+def generate_plith(topo_ls: List[int]) -> List[float]:
+    nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
+    p_lith_ls = list(range(nx*ny*nz))
+    for i in range(nx):
+        for j in range(ny):
+            d = 0.0
+            for k in range(nz):
+                m = calc_m(i,j,k,nx,ny)
+                idx = topo_ls[m]
+                if idx in (IDX_SEA, IDX_LAKE, IDX_AIR):
+                    p_lith_ls[m] = 1.0e20
+                    continue
+                dz = DXYZ[2][k]
+                dc = d + 0.5*dz
+                rho = 1100.0
+                p_lith_ls[m] = rho*G*dc*1.0e-6
+                d += dz
+    return p_lith_ls
 
 def calc_sattab(method="corey") -> Dict:
     satab: Tuple = None
@@ -854,7 +918,19 @@ def generate_input(
     tuning_params: Dict,
     tend: float,
     fpth: PathLike,
+    rn_dct_dynfr: Optional[Dict[int, Tuple[DUCTAB, DYNFRTAB]]]=None,
+    permxfr_ls: Optional[List[float]]=None,
+    permyfr_ls: Optional[List[float]]=None,
+    permzfr_ls: Optional[List[float]]=None,
+    p_fail_ls: Optional[List[float]]=None,
+    p_lith_ls: Optional[List[float]]=None,
 ):
+    dynamic = rn_dct_dynfr is not None and permxfr_ls is not None and permyfr_ls is not None and permzfr_ls is not None and p_fail_ls is not None and p_lith_ls is not None
+    duct, brit = False, False
+    if dynamic:
+        for idx, table in rn_dct_dynfr.items():
+            duct = duct or table[0] is not None
+            brit = brit or table[1] is not None
     nx, ny = len(DXYZ[0]), len(DXYZ[1])
     with open(fpth, "w", encoding="utf-8") as _f:
         __write: Callable = partial(write, _f)
@@ -883,6 +959,14 @@ def generate_input(
         # HCROCK
         __write("HCROCK                                  We enable heat conduction.")
         __write("")  # \n
+
+        # DUCTILE, DYNFRACK
+        if dynamic:
+            if duct:
+                __write("DUCTILE                                 - ductile behavior of rocks")
+            if brit:
+                __write("DYNFRACK                                - hydrofracturing")
+            __write("")
 
         # #  DUALPORO
         # __write("DUALPORO")
@@ -1137,6 +1221,24 @@ def generate_input(
         __write(_str)
         __write("")  # \n
 
+        if dynamic:
+            if brit:
+                __write("PRESFAIL")
+                _str: str = ""
+                for _v in p_fail_ls:
+                    _str += str(_v) + "  "
+                _str += "  /"
+                __write(_str)
+                __write("")
+            if duct:
+                __write("PRESLITH")  # \n
+                _str: str = ""
+                for _v in p_lith_ls:
+                    _str += str(_v) + "  "
+                _str += "  /"
+                __write(_str)
+                __write("")
+
         # EQUALREG
         __write(
             "EQUALREG                              We specify uniform distributions:"
@@ -1150,11 +1252,45 @@ def generate_input(
         __write("/")
         __write("")  # \n
 
+        # PERMFR
+        if dynamic:
+            __write("PERMXFR")
+            _str: str = ""
+            for _p in permxfr_ls:
+                _str += str(_p) + "  "
+            _str += "  /"
+            __write(_str)
+            __write("")  # \n
+
+            __write("PERMYFR")
+            _str: str = ""
+            for _p in permyfr_ls:
+                _str += str(_p) + "  "
+            _str += "  /"
+            __write(_str)
+            __write("")  # \n
+
+            __write("PERMZFR")
+            _str: str = ""
+            for _p in permzfr_ls:
+                _str += str(_p) + "  "
+            _str += "  /"
+            __write(_str)
+            __write("")  # \n
+
         # RPTGRID
         __write(
             "RPTGRID                               We define the output form the GRID sect."
         )
-        __write("  PORO PERMX PERMZ /")
+        _str = "  PORO PERMX PERMZ"
+        if dynamic:
+            if brit:
+                _str += " PRESFAIL PERMXFR PERMZFR"
+            if duct:
+                _str += " PRESLITH"
+            _str += " ACTNUM TYPENUM"
+        _str += " /"
+        __write(_str)
         __write("")  # \n
 
         # PROPS
@@ -1178,6 +1314,39 @@ def generate_input(
                 f"  {dens}  {hc} /                          rock density is {dens} kg/m3, rock heat capacity is {hc} kJ/kg/K"
             )
             __write("")  # \n
+
+            if dynamic:
+                duct_dynf = rn_dct_dynfr.get(idx, None)
+                if duct_dynf is not None:
+                    duct, dynf = duct_dynf
+                    # DUCTTAB
+                    if duct is not None:
+                        t_ls, eta_ls, l_d_map = duct
+                        __write("DUCTTAB")
+                        __write("-- ----------  ----------  ----------  ----------\n--   T units     Temp_b                   Temp_d        \n-- ----------  ----------  ----------  ----------")
+                        string = "       "
+                        for t in t_ls:
+                            string += str(t) + "   "
+                        __write(string + "   /")
+                        string = "                  "
+                        for eta in eta_ls:
+                            string += str(eta) + "   "
+                        __write(string + "   /")
+                        for ld_ls in l_d_map:
+                            string = "      "
+                            for v in ld_ls:
+                                string += str(v) + "   "
+                            __write(string + "   /")
+                        __write("/")
+                        __write("")
+                    if brit is not None:
+                        # DYNFRTAB
+                        __write("DYNFRTAB")
+                        __write("--   pore-fluid           fractures\n-- factor (lambda)     productivity (F)")
+                        for l,d,ximax in dynf:
+                            __write(f"      {l}    {d}    {ximax}  /")
+                        __write("/")
+                        __write("")
 
             # ENDROCK
             __write(
@@ -1428,9 +1597,14 @@ def generate_input(
 
         # RPTSUM
         __write("RPTSUM")
-        __write(
-            "   PRES TEMPC PHST SAT#LIQ SAT#GAS FLUXK#E COMP1T COMP2T DENT/  We specify the properties saved at every report time."
-        )
+        _str = "   PRES TEMPC PHST SAT#LIQ SAT#GAS FLUXK#E COMP1T COMP2T DENT"
+        if dynamic:
+            if duct:
+                _str += " DCTTMULT TRANMULT PRESLITH"
+            if brit:
+                _str += " PRESFAIL PRESFDYN PFLDFACT TRANFRMT"
+        _str += " /" 
+        __write(_str)
         __write("")  # \n
 
         #  RPTSRC
@@ -1448,9 +1622,8 @@ def generate_input(
         __write("WEEKTOL")
         __write("")
 
-        # NEWTON #!
+        # NEWTON
         __write("NEWTON")
-        # __write("1   2   2 /")  # 1, 3, 3 ?
         __write("1   5   5 /")
         __write("")
 
@@ -1475,28 +1648,27 @@ def generate_input(
         ts = TSTEP_INIT
         if tuning_params is not None:
             ts = tuning_params[0]
-        ts_max = calc_tstep(params.VENT_SCALE, params.INJ_RATE)
-        #!
-        if params.VENT_SCALE == 1000.0:
-            ts_max = 2.0
-        if params.VENT_SCALE == 10000.0:
-            ts_max = 1.0
-        if params.INJ_RATE > 10000.0:
-            ts_max = 1.0
-        if tuning_params is not None:
-            ts_max = tuning_params[1]
+
+        ts_max = TSTEP_MAX
+        if ts_max is None:
+            ts_max = calc_tstep(params.VENT_SCALE, params.INJ_RATE)
+            if params.VENT_SCALE == 1000.0:
+                ts_max = 2.0
+            if params.VENT_SCALE == 10000.0:
+                ts_max = 1.0
+            if params.INJ_RATE > 10000.0:
+                ts_max = 1.0
+            if tuning_params is not None:
+                ts_max = tuning_params[1]
         time_rpt = 0.0
         if tend is None:
-            tend = TIME_SS
+            tend = TIME_END
         while years_total < tend:
             if ts > ts_max:
                 ts = ts_max
-            if TRPT_UNREST is not None and ts == ts_max:
-                tstep_rpt = TRPT_UNREST
-            else:
-                tstep_rpt = ts * (
-                    NDTFIRST + years_total / tend * (NDTEND - NDTFIRST)
-                )
+            tstep_rpt = ts * (
+                NDTFIRST + years_total / tend * (NDTEND - NDTFIRST)
+            )
             if tend - years_total < tstep_rpt / 365.25:
                 tstep_rpt = (tend - years_total) * 365.25
             time_rpt += tstep_rpt
@@ -1564,10 +1736,8 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
     assert len(tempe_ls) == nxyz, len(tempe_ls)
     assert len(pres_ls) == nxyz, len(pres_ls)
     assert len(xco2_ls) == nxyz, len(xco2_ls)
-
-    with open(refpth, "r") as f:
+    with open(refpth, "r", encoding="utf-8") as f:
         lines = f.readlines()
-
     ln_insert_props = None
     ln_insert_tuning = None
     for i, l in enumerate(lines):
@@ -1593,7 +1763,7 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
         if "COMP1T\n" in l:
             delete_index.update([i, i + 1])
     # lines = [lines[i] for i in range(len(lines)) if i not in delete_index]
-    with open(tpth, "w") as f:
+    with open(tpth, "w", encoding="utf-8") as f:
         for ln, line in enumerate(lines):
             if ln in delete_index:
                 continue
@@ -1628,17 +1798,19 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
             
             if ln == ln_insert_tuning:
                 time = 0.0
-                while time < TEND_UNREST * 365.25:
-                    time += TRPT_UNREST
+                ts = TSTEP_INIT
+                while time < TIME_END * 365.25:
+                    tstep_rpt = ts * (
+                        NDTFIRST + time / TIME_END * (NDTEND - NDTFIRST)
+                    )
+                    time += tstep_rpt
                     f.write(f"TUNING\n")
-                    # f.write(f"    1* {TSTEP_UNREST}   1* {TSTEP_MIN} /\n")  #!
-                    f.write(f"    1* {250.0/3600.0/24.0}   1* {TSTEP_MIN} /\n")  #!タイムステップを小さくするなら、TRPTも小さくする
+                    f.write(f"    1* {TSTEP_MAX}   1* {TSTEP_MIN} /\n")  #!タイムステップを小さくするなら、TRPTも小さくする
                     f.write(f"TIME\n")
                     f.write(f"    {time} /\n")
                     f.write(f"\n")
 
             f.write(line)
-
 
 def generate_from_params(
     params: PARAMS,
@@ -1669,6 +1841,7 @@ def generate_from_params(
             else:
                 break
         started: bool = False
+        print(str(dirpth))
         for i in range(10000):
             fn = str(i).zfill(4)
             fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
@@ -1683,7 +1856,7 @@ def generate_from_params(
                 break
         if started:
             print(f"refpth: {fpth}")  #!
-            print(f"runpth: {pth}")  #!
+            print(f"runpth: {pth}")   #!
             nxyz = nxyz[0] * nxyz[1] * nxyz[2]
             cellid_props, _, time = load_sum(fpth)
             tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
@@ -1741,6 +1914,7 @@ def generate_from_params(
         rocknum_ls,
         perm_ls,
         rocknum_params,
+        topo_rocknum_map,
         rocknum_ptgrad,
         _,
         _,
@@ -1762,16 +1936,43 @@ def generate_from_params(
     )
 
     imperm_bounds: List[Tuple] = generate_imperm_top_bc(m_airbounds)
-    tend = TIME_SS
+    tend = TIME_END
     if refpth is not None:
         nxyz = nxyz[0] * nxyz[1] * nxyz[2]
         cellid_props, _, time = load_sum(refpth)
         tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
         pres_ls = get_v_ls(cellid_props, "PRES")[:nxyz]
         xco2_ls = get_v_ls(cellid_props, "COMP1T")[:nxyz]
-        tend = TEND_UNREST
     else:
         tempe_ls, pres_ls, xco2_ls = None, None, None
+ 
+    # DUCTTAB rocknum: DUCTTABのデータ
+    # DYNFRTAB rocknum: DYNFRTABのデータ
+    # PERMXFR, PERMYFR, PERMZFR (OPERAREGを使う方法もあるが、不必要に亀裂の浸透率を設定しないため、安全のためこちらを用いる)
+    rn_dct_dynfr, permxfr_ls, permyfr_ls, permzfr_ls, p_fail_ls, p_lith_ls = None, None, None, None, None, None
+    if params.permf_cap is not None:
+        db = params.db
+        dynfrtab_cap = None
+        assert db is not None
+        dynfrtab_cap, ducttab_cap = None, None
+        if db in ("duct", "db",):
+            ducttab_cap = generate_cap_ducttab()
+        if db in ("db","brit","idb","ibrit"):
+            dynfrtab_cap = generate_cap_dynfrtab(db)
+        rn_dct_dynfr = {topo_rocknum_map[IDX_CAPVENT]: (ducttab_cap, dynfrtab_cap)}
+        permxfr_ls, permyfr_ls, permzfr_ls = generate_permfr(
+            topo_ls,
+            perm_ls[0],
+            perm_ls[1],
+            perm_ls[2],
+            params.permf_cap,
+            [IDX_CAPVENT]
+            )
+        idx_pfail: Optional[Dict[int, float]] = None
+        if params.pfail is not None:
+            idx_pfail = {IDX_CAPVENT: params.pfail}
+        p_fail_ls = generate_pfail(topo_ls, idx_pfail)
+        p_lith_ls = generate_plith(topo_ls)
 
     # debug
     # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
@@ -1829,6 +2030,7 @@ def generate_from_params(
                 rocknum_ls,
                 perm_ls,
                 rocknum_params,
+                topo_rocknum_map,
                 lateral_bounds,
                 bottom_bounds,
                 rocknum_ptgrad,
@@ -1867,34 +2069,14 @@ def generate_from_params(
         tuning_params,
         tend,
         pth,
+        rn_dct_dynfr,
+        permxfr_ls,
+        permyfr_ls,
+        permzfr_ls,
+        p_fail_ls,
+        p_lith_ls,
     )
 
-
-from utils import condition_to_dir
 
 if __name__ == "__main__":
-    temp_src = 900.0
-    comp1t = 0.1
-    perm_vent = 1.0
-    inj_rate = 10000.0
-    cap_scale = 100000.0
-    basedir = r"E:\tarumai_tmp16"
-    from_latest = True
-    dirpth: Path = condition_to_dir(
-        basedir, temp_src, comp1t, inj_rate, perm_vent, cap_scale, from_latest
-    )
-    makedirs(dirpth, exist_ok=True)
-    print(dirpth)
-    generate_from_params(
-        PARAMS(
-            temp_src=temp_src,
-            comp1t=comp1t,
-            perm_vent=perm_vent,
-            inj_rate=inj_rate,
-            cap_scale=cap_scale,
-        ),
-        dirpth.joinpath("tmp.RUN"),
-        from_latest,
-    )
-    # print(calc_tstep(10.0, 10000.0, ))
     pass

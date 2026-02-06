@@ -1,6 +1,6 @@
 # TODO: should not call command in this directory
 
-from typing import Dict, OrderedDict, List, Any
+from typing import Dict, OrderedDict, Optional, Literal
 from os import PathLike, makedirs, getcwd, cpu_count, getpid
 import subprocess
 from pathlib import Path
@@ -12,7 +12,7 @@ from copy import copy
 import yaml
 from generate_input import generate_from_params
 from params import PARAMS, TUNING_PARAMS
-from constants import OUTDIR, CONDS_PID_MAP_NAME
+from constants import OUTDIR, CONDS_PID_MAP_NAME, DB
 from monitor import monitor_process, is_converged
 from utils import condition_to_dir, dir_to_condition, calc_infiltration, unrest_dir
 
@@ -44,7 +44,10 @@ def run_single_condition(
     ignore_convergence: bool = False,
     vk: bool = False,
     disperse_magmasrc: bool = False,
-) -> None:
+    permf_cap: Optional[float] = None,
+    db: Optional[DB]=None,
+    pfail: Optional[float]=None,
+    ) -> None:
     """Run MUFITS simulator in single condition 
 
     Args:
@@ -75,6 +78,9 @@ def run_single_condition(
         from_latest,
         vk=vk,
         disperse_magmasrc=disperse_magmasrc,
+        permf_cap=permf_cap,
+        db=db,
+        pfail=pfail
     )
     makedirs(sim_dir, exist_ok=True)
     if is_converged(sim_dir) and not ignore_convergence:
@@ -90,9 +96,12 @@ def run_single_condition(
         rain_unit=calc_infiltration() * 1000.0,
         vk=vk,
         disperse_magmasrc=disperse_magmasrc,
+        permf_cap=permf_cap,
+        db=db,
+        pfail=pfail
     )
-
     runpth = sim_dir.joinpath("tmp.RUN")
+
     generate_from_params(params, runpth, from_latest)
     exepth = cur_dir.joinpath("H64.EXE")
     logpth = sim_dir.joinpath("log.txt")
@@ -201,6 +210,9 @@ def run_single_unrest(
     c: float,
     vk: bool,
     disperse_magmasrc: bool,
+    permf_cap: Optional[float]=None,
+    db: Optional[DB]=None,
+    pfail: Optional[float]=None
 ):
     """Calculate unrest phase
 
@@ -220,7 +232,8 @@ def run_single_unrest(
             fluid from multiple bottom blocks (True: inject from multiple blocks)
     """
     simdir: Path = condition_to_dir(
-        base_dir, temp, comp1t, q, a, c, vk=vk, disperse_magmasrc=disperse_magmasrc
+        base_dir, temp, comp1t, q, a, c, vk=vk, disperse_magmasrc=disperse_magmasrc, permf_cap=permf_cap,db=db,
+        pfail=pfail
     )
     makedirs(simdir, exist_ok=True)
     params = PARAMS(
@@ -232,6 +245,9 @@ def run_single_unrest(
         vk=vk,
         rain_unit=calc_infiltration() * 1000.0,
         disperse_magmasrc=disperse_magmasrc,
+        permf_cap=permf_cap,
+        db=db,
+        pfail=pfail
     )
     runpth = simdir.joinpath("tmp.RUN")
     # min, max, rptstep
@@ -346,28 +362,33 @@ def run_unrest(
                             )
     pool.shutdown(wait=True)
 
-
 if __name__ == "__main__":
     # search_conditions(4, False, False, True)
-    run_single_condition(900.0,
-                         0.0,
-                         15000.0,
-                         10000.0,
-                         None,
-                         base_dir.joinpath("900.0_0.0_1000.0_10000.0_v").joinpath("unrest"),
-                         True,
-                         False,
-                         True,
-                         True,
-                         )
+    # run_single_condition(900.0,
+    #                      0.0,
+    #                      35000.0,
+    #                      10.0,
+    #                      1.0,
+    #                      base_dir.joinpath("900.0_0.0_1000.0_10.0_1.0_v").joinpath("unrest"),
+    #                      True,
+    #                      False,
+    #                      True,
+    #                      True,
+    #                      1.0e5,
+    #                      "brit",
+    #                      2.7
+    #                      )
     
-    # run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10000.0_v\unrest",
-    #                   r"E:\tarumai2\900.0_0.0_1000.0_10000.0_v\tmp.0286.SUM",
-    #                   900.0,
-    #                   0.0,
-    #                   15000.0,
-    #                   10000.0,
-    #                   None,
-    #                   True,
-    #                   True)
+    run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest",
+                      r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\tmp.0028.SUM",
+                      900.0,
+                      0.0,
+                      35000.0,
+                      10.0,
+                      1.0,
+                      True,
+                      True,
+                      1.0e5,
+                      "ibrit",
+                      2.7)
     pass

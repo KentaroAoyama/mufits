@@ -1,5 +1,6 @@
+from typing import Optional, Literal
 from copy import deepcopy
-from constants import TOPO_CONST_PROPS, IDX_AIR
+from constants import TOPO_CONST_PROPS, IDX_AIR, DB
 from utils import calc_infiltration
 
 class PARAMS:
@@ -13,9 +14,12 @@ class PARAMS:
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
         perm_vent: float = 10.0,
         inj_rate: float = 2000.0,
-        cap_scale: float = None,
+        cap_scale: Optional[float] = None,
         vk: bool = False,
-        disperse_magmasrc: bool = False
+        disperse_magmasrc: bool = False,
+        permf_cap: Optional[float] = None,
+        db: Optional[DB]=None,
+        pfail: Optional[float] = None,
     ) -> None:
         """Parameters
 
@@ -28,7 +32,11 @@ class PARAMS:
             temp_rain (float): Temperature of rain sources (℃).
             perm_vent (float): Factor multiplied by the permeability of the host rock.
             inj_rate (float): Injection rate (t/day)
+            permf_cap (float)
         """
+        if db is not None:
+            assert db in ("db","duct","brit","idb","ibrit"), db
+
         # Source properties
         self.PRES_SRC = pres_src
         self.SRC_TEMP = temp_src
@@ -47,11 +55,13 @@ class PARAMS:
         self.INJ_RATE = inj_rate
 
         # cap properties
-        self.CAP_SCALE: float = cap_scale
+        self.CAP_SCALE: Optional[float] = cap_scale
 
         self.VK: bool = vk
         self.disperse_magmasrc: bool = disperse_magmasrc
-
+        self.permf_cap: Optional[float] = permf_cap
+        self.db: Optional[DB]=db
+        self.pfail: Optional[float] = pfail
 
 
 class PARAMS_VTK:
