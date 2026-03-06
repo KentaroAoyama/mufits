@@ -364,31 +364,32 @@ def run_unrest(
 
 if __name__ == "__main__":
     # search_conditions(4, False, False, True)
-    # run_single_condition(900.0,
-    #                      0.0,
-    #                      35000.0,
-    #                      10.0,
-    #                      1.0,
-    #                      base_dir.joinpath("900.0_0.0_1000.0_10.0_1.0_v").joinpath("unrest"),
-    #                      True,
-    #                      False,
-    #                      True,
-    #                      True,
-    #                      1.0e5,
-    #                      "brit",
-    #                      2.7
-    #                      )
+    run_single_condition(900.0,
+                         0.0,
+                         35000.0,
+                         10.0,
+                         1.0,
+                         base_dir.joinpath("900.0_0.0_1000.0_10.0_1.0_v").joinpath("unrest"),
+                         True,
+                         False,
+                         True,
+                         True,
+                         1.0e5,
+                         "brit",
+                         2.7
+                         )
     
-    run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest",
-                      r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\tmp.0028.SUM",
-                      900.0,
-                      0.0,
-                      35000.0,
-                      10.0,
-                      1.0,
-                      True,
-                      True,
-                      1.0e5,
-                      "ibrit",
-                      2.7)
+    # TODO: TRANFRMT引継ぎ
+    # run_single_unrest(r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest",
+    #                   r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\tmp.0028.SUM",
+    #                   900.0,
+    #                   0.0,
+    #                   15000.0,
+    #                   10.0,
+    #                   1.0,
+    #                   True,
+    #                   True,
+    #                   1.0e5,
+    #                   "brit",
+    #                   2.7)
     pass

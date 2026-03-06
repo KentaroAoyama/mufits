@@ -39,7 +39,8 @@ from utils import (
     calc_F,
     calc_ximax,
     generate_simple_vent,
-    generate_simple_cap
+    generate_simple_cap,
+    dir_to_condition
 )
 
 from constants import (
@@ -1729,7 +1730,7 @@ def generate_input(
         )
 
 
-def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
+def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls, transfrmt_ls: Optional[List[float]]=None) -> None:
 
     nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
     nxyz = nx * ny * nz
@@ -1761,6 +1762,8 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
         if "PRES\n" in l:
             delete_index.update([i, i + 1])
         if "COMP1T\n" in l:
+            delete_index.update([i, i + 1])
+        if "TRANFRMT\n" in l:
             delete_index.update([i, i + 1])
     # lines = [lines[i] for i in range(len(lines)) if i not in delete_index]
     with open(tpth, "w", encoding="utf-8") as f:
@@ -1795,6 +1798,15 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls) -> None:
                 _str += "  /\n"
                 f.write(_str)
                 f.write("\n")  # \n
+
+                if transfrmt_ls is not None:
+                    f.write("TRANFRMT\n")
+                    _str: str = ""
+                    for _v in transfrmt_ls:
+                        _str += str(_v) + "  "
+                    _str += "  /\n"
+                    f.write(_str)
+                    f.write("\n")  # \n
             
             if ln == ln_insert_tuning:
                 time = 0.0
@@ -1862,12 +1874,23 @@ def generate_from_params(
             tempe_ls = get_v_ls(cellid_props, "TEMPC")[:nxyz]
             pres_ls = get_v_ls(cellid_props, "PRES")[:nxyz]
             xco2_ls = get_v_ls(cellid_props, "COMP1T")[:nxyz]
+            refdir = fpth.parent
+            if "ITER" in refdir.name:
+                refdir = refdir.parent
+            condition = dir_to_condition(refdir)
+            transfrmt_ls: Optional[List[float]] = None
+            if condition.get("db", None) is not None:
+                db = condition.get("db")
+                if db in ("brit", "db", "ibrit", "idb"):
+                    transfrmt_ls = get_v_ls(cellid_props, "TRANFRMT")[:nxyz]
+                    
             modify_file(
                 dirpth.joinpath("tmp.RUN"),
                 pth,
                 tempe_ls,
                 pres_ls,
                 xco2_ls,
+                transfrmt_ls
             )
             return
 

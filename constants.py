@@ -334,20 +334,24 @@ T_GRAD_LAKE = 0.0
 T_GRAD_ROCK = 0.06
 
 # Simulation time (in years)
-TIME_END = 30.0
+TIME_END = 50.0
+# TIME_END = 600.0 / (3600.0*24.0*365.25)
 
 # Initial time step (in days)
 TSTEP_MIN = 1.0e-12
-TSTEP_INIT = 1000.0/(24.0*3600.0)
+TSTEP_INIT = 220.0/(24.0*3600.0)
 # Maximum time step (days)
-TSTEP_MAX: Optional[float] = 1000.0/(24.0*3600.0) # 1.0
+TSTEP_MAX: Optional[float] = 220.0/(24.0*3600.0) # 1.0
 # number of iterations for each TSTEP_MAX
 # 浸透率の異方性を入れる前：
 # NDTFIRST = 10
 # NDTEND = 10
 # TMULT = 1.05
 NDTFIRST = int(7.0/TSTEP_INIT)+1
-NDTEND = int(7.0/TSTEP_MAX)+1
+# NDTFIRST = int(TSTEP_INIT*1000.0) + 1
+# NDTFIRST = 1
+# NDTEND = int(7.0/TSTEP_MAX)+1
+NDTEND = NDTFIRST
 TMULT = 2.0 # 7 is optimum?
 
 DB = Literal["db","duct","brit","idb","ibrit"]
