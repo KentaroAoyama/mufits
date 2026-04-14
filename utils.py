@@ -1,7 +1,8 @@
-from typing import List, Tuple, Dict, Optional, Literal
+from typing import List, Tuple, Dict, Optional, BinaryIO, Literal, Any
+import struct
 from pathlib import Path
 from os import PathLike, makedirs
-from math import log10, log
+from math import log10, log, isnan
 from copy import deepcopy
 
 import numpy as np
@@ -12,6 +13,7 @@ from pyproj import Transformer
 from shapely import Polygon, Point
 
 from constants import (
+    CACHE_DIR,
     DXYZ,
     P_GROUND,
     P_GRAD_AIR,
@@ -30,6 +32,8 @@ from constants import (
     CRS_RECT,
     DB
 )
+
+ENCODING = "windows-1251"
 
 
 def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
@@ -64,32 +68,39 @@ def calc_m(i: int, j: int, k: int, nx: int, ny: int) -> int:
     return nx * ny * k + nx * j + i
 
 
-def stack_from_0(_ls: List[float]) -> List[float]:
+def stack_from_0(_ls: List[float], centroid=True) -> List[float]:
     """Generate a list containing the center coordinates of the grid from
     the list containing the grid spacing. The element with index 0 is the origin.
 
     Args:
         _ls (List[float]): 1d list containing the grid spacing
-
+        centroid (Optional[bool]): Returns centroid of coordinate if True
     Returns:
         List[float]: 1d list containing the center coordinates of the grid
     """
     c_ls = []
     for i, _d in enumerate(_ls):
         if len(c_ls) == 0:
-            c_ls.append(abs(_d) * 0.5)
+            if centroid:
+                c_ls.append(abs(_d) * 0.5)
+            else:
+                c_ls.append(0.0)
             continue
-        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+        if centroid:
+            c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+        else:
+            c_ls.append(sum(_ls[:i]))
     return c_ls
 
 
-def stack_from_center(_ls: List[float]) -> List[float]:
+def stack_from_center(_ls: List[float], centroid=True) -> List[float]:
     """Generate a list containing the center coordinates of the grid from
     the list containing the grid spacing. The element whose index is in 
     the center is assumed to be the origin.
 
     Args:
         _ls (List[float]): 1d list containing the grid spacing
+        centroid (Optional[bool]): Returns centroid of coordinate if True
 
     Returns:
         List[float]: 1d list containing the center coordinates of the grid
@@ -102,9 +113,13 @@ def stack_from_center(_ls: List[float]) -> List[float]:
         sum_left = -sum(_ls[:_lhalf]) + 0.5 * _ls[_lhalf]
     c_ls: List = []
     for _d in _ls:
-        sum_left += _d * 0.5
-        c_ls.append(sum_left)
-        sum_left += _d * 0.5
+        if centroid:
+            sum_left += _d * 0.5
+            c_ls.append(sum_left)
+            sum_left += _d * 0.5
+        else:
+            c_ls.append(sum_left)
+            sum_left += _d
     return c_ls
 
 
@@ -121,6 +136,16 @@ def calc_k_z(z: float) -> float:
         float: Permeability (mD)
     """
     return 10.0 ** (MIA + MIB * log10(z / 1000.0)) / 9.869233 * 1.0e16
+
+
+def load_topo_ls() -> Tuple[List[int], Tuple[Any]]:
+    fpth = Path(CACHE_DIR).joinpath("topo_ls")
+    assert fpth.exists(), f"{str(fpth)} not exists"
+    with open(fpth, "rb") as pkf:
+        obj = pickle.load(
+                pkf
+            )
+    return obj
 
 
 def _kh_i(z: float, A: float, B: float) -> float:
@@ -295,6 +320,207 @@ def dir_to_condition(cond_dir: PathLike) -> Dict[str, float]:
     _dct.setdefault("pfail", None)
     return _dct
 
+def dump_cache(prop: Tuple[float, List[float]], cache_pth: PathLike, update=False) -> None:
+    cache_pth = Path(cache_pth)
+    if cache_pth.exists() and not update:
+        return
+    makedirs(cache_pth.parent, exist_ok=True)
+    with open(cache_pth, "wb") as pkf:
+        pickle.dump(prop, pkf, pickle.HIGHEST_PROTOCOL)
+
+def load_cache(cache_file: PathLike) -> Tuple[float, List[float]]:
+    with open(cache_file, "rb") as pkf:
+        data: Tuple[float, List[float]] = pickle.load(pkf)
+    return data
+
+def read_Array(f: BinaryIO) -> Tuple[float, List]:
+    props_ls: List = []
+    b = f.read(8)
+    b = f.read(8)
+    # Record length
+    b = f.read(8)
+    # Number of properties
+    b = f.read(4)
+    np: int = struct.unpack("i", b)[0]
+    # Number of objects
+    b = f.read(4)
+    no: int = struct.unpack("i", b)[0]
+    # Property description
+    for _ in range(np):
+        # Tag
+        b = f.read(8)
+        mnemonic: str = b.decode(encoding=ENCODING)
+        b = f.read(8)
+        dimension: str = b.decode(encoding=ENCODING)
+        b = f.read(8)
+        tag_ls = []
+        while "ENDITEM" not in b.decode(encoding=ENCODING):
+            tag_ls.append(b.decode(encoding=ENCODING))
+            b = f.read(8)  # ENDITEM
+        props_ls.append((mnemonic, dimension, tag_ls))
+    return no, props_ls
+
+def read_DATA(f: BinaryIO, no: int, props_ls: List, cellid_props: Dict) -> Dict:
+    for _ in range(no):
+        cellid: int = None
+        for prop in props_ls:
+            prop_name, _, tag_ls = prop
+            v = None
+            flag_int1, flag_int2, flag_int4, flag_char8 = False, False, False, False
+            for _s in tag_ls:
+                if "INT1" in _s:
+                    flag_int1 = True
+                    continue
+                if "INT2" in _s:
+                    flag_int2 = True
+                    continue
+                if "INT4" in _s:
+                    flag_int4 = True
+                    continue
+                if "CHAR8" in _s:
+                    flag_char8 = True
+            if flag_int1:
+                b = f.read(1)
+                v = struct.unpack("b", b)[0]
+            elif flag_int2:
+                b = f.read(2)
+                v = struct.unpack("h", b)[0]
+            elif flag_int4:
+                b = f.read(4)
+                v = struct.unpack("i", b)[0]
+            elif flag_char8:
+                b = f.read(8)
+                v = b.decode(encoding=ENCODING)
+            else:
+                b = f.read(8)
+                v = struct.unpack("d", b)[0]
+            if "CELLID" in prop_name:
+                # set id
+                cellid = v
+            elif "SRCNAME" in prop_name:
+                # set id
+                cellid = v
+            else:
+                # Set cellid_props
+                _props: Dict = cellid_props.setdefault(cellid, {})
+                prop_name = prop_name.replace(" ", "")
+                _props.setdefault(prop_name, v)
+    # ENDDATA
+    b = f.read(8)
+    b = f.read(8)  # 0
+    return cellid_props
+
+def load_sum(fpth: PathLike, only_time=False) -> Tuple[Dict, Dict, float]:
+    fpth = Path(fpth)
+    with open(fpth, "rb") as f:
+        cellid_props: Dict = {}
+        srcid_props: Dict = {}  # not load for now
+        time: float = None
+        while f.readable():
+            # get the name
+            b = f.read(8)
+            name = b.decode(encoding=ENCODING)
+            if name in "BINARY":
+                f.read(8)
+                continue
+            if name in "HMDSPEC":
+                f.read(8)
+                continue
+            # Record TIME
+            if name == "TIME    ":
+                _ = f.read(8)  # 16 (int)
+                # time value
+                b = f.read(8)
+                time = struct.unpack("d", b)[0]
+                if only_time:
+                    return time
+                b = f.read(8)
+                continue
+            # Block CELLDATA
+            # contains "ARRAYS" and "DATA"
+            if name == "CELLDATA":
+                # ARRAYS
+                no, props_ls = read_Array(f)
+                # DATA
+                b = f.read(8)
+                # Record length
+                b = f.read(8)
+                read_DATA(f, no, props_ls, cellid_props)
+                break
+            # Block SRCDATA
+            # contains "ARRAYS" and "DATA"
+            if "SRCDATA" in name:
+                # ARRAYS
+                no, props_ls = read_Array(f)
+                # DATA
+                b = f.read(8)
+                # Record length
+                b = f.read(8)
+                read_DATA(f, no, props_ls, srcid_props)
+                break
+            if "ENDFILE" in name:
+                break
+    return cellid_props, srcid_props, time
+
+def load_snap(sumpth: PathLike, prop_names: List[str]) -> List[Tuple[float, List[float]]]:
+    sumpth = Path(sumpth)
+    cache_dir_base = sumpth.parent.joinpath("cache")
+    exist = True
+    cache_file_ls: List[Path] = []
+    for prop_name in prop_names:
+        cache_file = cache_dir_base.joinpath(prop_name).joinpath(sumpth.stem)
+        exist *= cache_file.exists()
+        cache_file_ls.append(cache_file)
+    # (time, physical property)
+    props: List[Tuple[float, List[float]]] = []
+    if exist:
+        for cache_file in cache_file_ls:
+            props.append(load_cache(cache_file))
+    else:
+        cellid_props, _, time = load_sum(sumpth)
+        for prop_name, cache_file in zip(prop_names, cache_file_ls):
+            v_ls = get_v_ls(cellid_props, prop_name)
+            prop = (time, v_ls)
+            dump_cache(prop, cache_file)
+            props.append(prop)
+    return props
+
+def get_v_ls(props: Dict, prop_name: str) -> List[float]:
+    v_ls: List[float] = list(range(len(props)))
+    for i, (_, prop) in enumerate(props.items()):
+        v = prop[prop_name]
+        assert isinstance(v, float)
+        if isnan(v):
+            v = 0.0
+        v_ls[i] = v
+    return v_ls
+
+def get_fpth_in_timeseries(simdir: PathLike, ignore_first: bool = False) -> List[Path]:
+    def __get_fpth_in_singledir(__dir) -> List[Path]:
+        __dir = Path(__dir)
+        __fpth_ls = []
+        for i in range(10000):
+            if ignore_first and i == 0:
+                continue
+            fn = str(i).zfill(4)
+            fpth = __dir.joinpath(f"tmp.{fn}.SUM")
+            if fpth.exists():
+                __fpth_ls.append(fpth)
+            else:
+                break
+        return __fpth_ls
+
+    simdir = Path(simdir)
+    fpth_ls: List = __get_fpth_in_singledir(simdir)
+
+    for i in range(1, 10000):
+        _dirpth = simdir.joinpath(f"ITER_{i}")
+        if _dirpth.exists():
+            fpth_ls.extend(__get_fpth_in_singledir(_dirpth))
+        else:
+            break
+    
+    return fpth_ls
 
 def calc_press_air(elv: float) -> float:
     """Calculate air pressure in Pa

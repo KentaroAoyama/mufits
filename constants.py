@@ -7,6 +7,15 @@ from pathlib import Path
 ORIGIN = (42.690531, 141.376630, 955.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
 
+# ドーム近傍の基線長
+# 目視で読み取り：https://www.pref.hokkaido.lg.jp/fs/1/2/6/2/9/6/7/1/_/05%20%E7%81%AB%E5%B1%B1%E5%B0%82%E9%96%80%E5%A7%94%E5%93%A1%E4%BC%9A%E3%80%90%E8%B3%87%E6%96%991%E3%80%91(%E6%9C%AD%E5%B9%8C%E7%AE%A1%E5%8C%BA%E6%B0%97%E8%B1%A1%E5%8F%B0)%E6%A8%BD%E5%89%8D%E5%B1%B1.pdf
+POS_GNSS = {
+    "SW": (42.686931,141.373122),
+    "NW": (42.693319,141.374195),
+    "NE": (42.692483,141.381217),
+    "SE": (42.687010,141.380804),
+}
+
 # OUTDATED
 POS_SINK = {"A": (42.688814, 141.380509, 955.6),
             "B": (42.689230, 141.375933, 981.0),
@@ -368,7 +377,7 @@ DB = Literal["db","duct","brit","idb","ibrit"]
 # TRPT_UNREST = 30.0 # in days unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TEND_UNREST = 30.0 # in years
 
-OUTDIR = r"E:\tarumai2"
+OUTDIR = "/mnt/e/tarumai2"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

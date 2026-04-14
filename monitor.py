@@ -44,7 +44,15 @@ from utils import (
     condition_to_dir,
     dir_to_condition,
     generate_simple_vent,
-    generate_simple_cap
+    generate_simple_cap,
+    dump_cache,
+    load_cache,
+    read_Array,
+    read_DATA,
+    load_sum,
+    load_snap,
+    get_v_ls,
+    get_fpth_in_timeseries
 )
 
 ENCODING = "windows-1251"
@@ -61,184 +69,6 @@ def _prepare_ticks(plt: plt, axes: List[plt.Axes], params: Tuple = (7, 5, 7, 5),
         ax.tick_params(axis="y", which="major", length=params[2])
         ax.tick_params(axis="y", which="minor", length=params[3])
         ax.tick_params(labelsize=labelsize)
-
-
-def read_Array(f: BinaryIO) -> Tuple[float, List]:
-    props_ls: List = []
-    b = f.read(8)
-    b = f.read(8)
-    # Record length
-    b = f.read(8)
-    # Number of properties
-    b = f.read(4)
-    np: int = struct.unpack("i", b)[0]
-    # Number of objects
-    b = f.read(4)
-    no: int = struct.unpack("i", b)[0]
-    # Property description
-    for _ in range(np):
-        # Tag
-        b = f.read(8)
-        mnemonic: str = b.decode(encoding=ENCODING)
-        b = f.read(8)
-        dimension: str = b.decode(encoding=ENCODING)
-        b = f.read(8)
-        tag_ls = []
-        while "ENDITEM" not in b.decode(encoding=ENCODING):
-            tag_ls.append(b.decode(encoding=ENCODING))
-            b = f.read(8)  # ENDITEM
-        props_ls.append((mnemonic, dimension, tag_ls))
-    return no, props_ls
-
-
-def read_DATA(f: BinaryIO, no: int, props_ls: List, cellid_props: Dict) -> Dict:
-    for _ in range(no):
-        cellid: int = None
-        for prop in props_ls:
-            prop_name, _, tag_ls = prop
-            v = None
-            flag_int1, flag_int2, flag_int4, flag_char8 = False, False, False, False
-            for _s in tag_ls:
-                if "INT1" in _s:
-                    flag_int1 = True
-                    continue
-                if "INT2" in _s:
-                    flag_int2 = True
-                    continue
-                if "INT4" in _s:
-                    flag_int4 = True
-                    continue
-                if "CHAR8" in _s:
-                    flag_char8 = True
-            if flag_int1:
-                b = f.read(1)
-                v = struct.unpack("b", b)[0]
-            elif flag_int2:
-                b = f.read(2)
-                v = struct.unpack("h", b)[0]
-            elif flag_int4:
-                b = f.read(4)
-                v = struct.unpack("i", b)[0]
-            elif flag_char8:
-                b = f.read(8)
-                v = b.decode(encoding=ENCODING)
-            else:
-                b = f.read(8)
-                v = struct.unpack("d", b)[0]
-            if "CELLID" in prop_name:
-                # set id
-                cellid = v
-            elif "SRCNAME" in prop_name:
-                # set id
-                cellid = v
-            else:
-                # Set cellid_props
-                _props: Dict = cellid_props.setdefault(cellid, {})
-                prop_name = prop_name.replace(" ", "")
-                _props.setdefault(prop_name, v)
-    # ENDDATA
-    b = f.read(8)
-    b = f.read(8)  # 0
-    return cellid_props
-
-
-def dump_cache(prop: Tuple[float, List[float]], cache_pth: PathLike, update=False) -> None:
-    cache_pth = Path(cache_pth)
-    if cache_pth.exists() and not update:
-        return
-    makedirs(cache_pth.parent, exist_ok=True)
-    with open(cache_pth, "wb") as pkf:
-        pickle.dump(prop, pkf, pickle.HIGHEST_PROTOCOL)
-
-def load_cache(cache_file: PathLike) -> Tuple[float, List[float]]:
-    with open(cache_file, "rb") as pkf:
-        data: Tuple[float, List[float]] = pickle.load(pkf)
-    return data
-
-def load_sum(fpth: PathLike, only_time=False) -> Tuple[Dict, Dict, float]:
-    fpth = Path(fpth)
-    with open(fpth, "rb") as f:
-        cellid_props: Dict = {}
-        srcid_props: Dict = {}  # not load for now
-        time: float = None
-        while f.readable():
-            # get the name
-            b = f.read(8)
-            name = b.decode(encoding=ENCODING)
-            if name in "BINARY":
-                f.read(8)
-                continue
-            if name in "HMDSPEC":
-                f.read(8)
-                continue
-            # Record TIME
-            if name == "TIME    ":
-                _ = f.read(8)  # 16 (int)
-                # time value
-                b = f.read(8)
-                time = struct.unpack("d", b)[0]
-                if only_time:
-                    return time
-                b = f.read(8)
-                continue
-            # Block CELLDATA
-            # contains "ARRAYS" and "DATA"
-            if name == "CELLDATA":
-                # ARRAYS
-                no, props_ls = read_Array(f)
-                # DATA
-                b = f.read(8)
-                # Record length
-                b = f.read(8)
-                read_DATA(f, no, props_ls, cellid_props)
-                break
-            # Block SRCDATA
-            # contains "ARRAYS" and "DATA"
-            if "SRCDATA" in name:
-                # ARRAYS
-                no, props_ls = read_Array(f)
-                # DATA
-                b = f.read(8)
-                # Record length
-                b = f.read(8)
-                read_DATA(f, no, props_ls, srcid_props)
-                break
-            if "ENDFILE" in name:
-                break
-    return cellid_props, srcid_props, time
-
-
-def load_snap(sumpth: PathLike, prop_names: List[str]) -> List[Tuple[float, List[float]]]:
-    sumpth = Path(sumpth)
-    cache_dir_base = sumpth.parent.joinpath("cache")
-    exist = True
-    cache_file_ls: List[Path] = []
-    for prop_name in prop_names:
-        cache_file = cache_dir_base.joinpath(prop_name).joinpath(sumpth.stem)
-        exist *= cache_file.exists()
-        cache_file_ls.append(cache_file)
-    props: List[Tuple[float, List[float]]] = []
-    if exist:
-        for cache_file in cache_file_ls:
-            props.append(load_cache(cache_file))
-    else:
-        cellid_props, _, time = load_sum(sumpth)
-        for prop_name, cache_file in zip(prop_names, cache_file_ls):
-            v_ls = get_v_ls(cellid_props, prop_name)
-            prop = (time, v_ls)
-            dump_cache(prop, cache_file)
-            props.append(prop)
-    return props
-
-def get_v_ls(props: Dict, prop_name: str) -> List[float]:
-    v_ls: List[float] = list(range(len(props)))
-    for i, (_, prop) in enumerate(props.items()):
-        v = prop[prop_name]
-        assert isinstance(v, float)
-        if isnan(v):
-            v = 0.0
-        v_ls[i] = v
-    return v_ls
 
 
 def calc_prop_diff(props0: Dict, props1: Dict, prop_name: str) -> float:
@@ -757,33 +587,6 @@ def get_latest_fumarole_prop(
         for name, v in props.items():
             f.write(f"{name}: {v}\n")
 
-def get_fpth_in_timeseries(simdir: PathLike, ignore_first: bool = False) -> List[Path]:
-    def __get_fpth_in_singledir(__dir) -> List[Path]:
-        __dir = Path(__dir)
-        __fpth_ls = []
-        for i in range(10000):
-            if ignore_first and i == 0:
-                continue
-            fn = str(i).zfill(4)
-            fpth = __dir.joinpath(f"tmp.{fn}.SUM")
-            if fpth.exists():
-                __fpth_ls.append(fpth)
-            else:
-                break
-        return __fpth_ls
-
-    simdir = Path(simdir)
-    fpth_ls: List = __get_fpth_in_singledir(simdir)
-
-    for i in range(1, 10000):
-        _dirpth = simdir.joinpath(f"ITER_{i}")
-        if _dirpth.exists():
-            fpth_ls.extend(__get_fpth_in_singledir(_dirpth))
-        else:
-            break
-    
-    return fpth_ls
-
 
 def plot_sum_foreach_tstep(
     simdir: PathLike,
@@ -1029,7 +832,7 @@ def sanity_check(pth, prop_ls: List = ["TEMPC", "PRES", "COMP1T"]):
     print(badconds)
     
 
-def img2mov(imgdir: PathLike, movdir: PathLike= None) -> None:
+def img2mov(imgdir: PathLike, movdir: PathLike= None, ftype="displacement") -> None:
     imgdir = Path(imgdir)
     if movdir is None:
         movdir = Path(imgdir)
@@ -1037,9 +840,13 @@ def img2mov(imgdir: PathLike, movdir: PathLike= None) -> None:
     idxdct: Dict = {}
     for pth in imgdir.glob('**/*.png'):
         fname = pth.name.replace(".png", "")
-        _ls: List = fname.split("_")
-        idxdct.setdefault(int(_ls[1]), []).append([float(_ls[0]), pth])
-        
+        if ftype=="displacement":
+            fname = fname.replace("tmp.", "")
+            idxdct.setdefault(0, []).append([float(fname), pth])
+        else:
+            _ls: List = fname.split("_")
+            idxdct.setdefault(int(_ls[1]), []).append([float(_ls[0]), pth])
+
     for idx, _ls in idxdct.items():
         time_ls = [_l[0] for _l in _ls]
         pth_ls = [_l[1] for _l in _ls]
@@ -1254,6 +1061,8 @@ from utils import calc_m, calc_press_air
 from constants import IDX_AIR, IDX_LAND, IDX_VENT, DXYZ
 
 if __name__ == "__main__":
+    img2mov("/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d/tstep/displacement/X/", ftype="displacement")
+
     # check_convergence(r"E:\tarumai4")
     # cellid_props, srcid_props, time = load_sum(r"E:\tarumai\200.0_0.0_100.0_10.0\tmp.0000.SUM")
     # for i, (_, prop) in enumerate(cellid_props.items()):
@@ -1310,8 +1119,8 @@ if __name__ == "__main__":
     # # get_latest_fumarole_prop(pth, "FLUXK#E")
     # # load_results_and_plt_conv(pth)
     
-    dirpth = r"E:\tarumai2\900.0_0.0_1000.0_10.0_1.0_v\unrest\900.0_0.0_35000.0_10.0_1.0_v_d_dyn100000.0_ibrit_pf2.7"
-    print(progress_time(dirpth) / 365.25)
+    dirpth = "/mnt/tarumai2/900.0_0.1_10000.0_10.0_1.0_v/unrest/900.0_0.1_35000.0_10.0_1.0_v_d_dyn100000.0_brit_pf2.7"
+    # print(progress_time(dirpth) / 365.25)
     # plot_sum_foreach_tstep(dirpth, 
     #                        ("Y",), 
     #                        ["TEMPC", 
@@ -1339,7 +1148,7 @@ if __name__ == "__main__":
     # img2mov(dirpth + r"\tstep\FLUXK#E\Y")
     # print(progress_time(dirpth) / 365.25)
     # get_latest_fumarole_prop(dirpth, "TEMPC")
-    plt_warning_tstep(dirpth)
+    # plt_warning_tstep(dirpth)
 
     # dir_ls = [r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_20000.0_10.0_100000.0_v_d",
     #  r"E:\tarumai2\900.0_0.0_1000.0_10.0_100000.0_v\unrest\900.0_0.0_25000.0_10.0_100000.0_v_d",
