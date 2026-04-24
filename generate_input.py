@@ -40,7 +40,9 @@ from utils import (
     calc_ximax,
     generate_simple_vent,
     generate_simple_cap,
-    dir_to_condition
+    dir_to_condition,
+    load_sum,
+    get_v_ls
 )
 
 from constants import (
@@ -91,10 +93,11 @@ from constants import (
     PERM_MAX,
     PERM_CAP,
     DB,
+    LICENSE_PTH,
+    EOS_PTH
 )
 
-from params import PARAMS, TUNING_PARAMS
-from monitor import load_sum, get_v_ls
+from params import PARAMS
 
 
 def __clip_xy(
@@ -1730,7 +1733,14 @@ def generate_input(
         )
 
 
-def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls, transfrmt_ls: Optional[List[float]]=None) -> None:
+def modify_file(refpth,
+                tpth,
+                tempe_ls,
+                pres_ls,
+                xco2_ls,
+                transfrmt_ls: Optional[List[float]]=None,
+                tend: Optional[float]=None,
+                add_props: Optional[List[str]]=None) -> None:
 
     nx, ny, nz = len(DXYZ[0]), len(DXYZ[1]), len(DXYZ[2])
     nxyz = nx * ny * nz
@@ -1765,10 +1775,32 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls, transfrmt_ls: Optional
             delete_index.update([i, i + 1])
         if "TRANFRMT\n" in l:
             delete_index.update([i, i + 1])
+        if "LICENSE\n" in l:
+            delete_index.update([i, i + 1])
+        if "LOADEOS" in l:
+            delete_index.update([i, i + 1])
+        if add_props is not None:
+            if "RPTSUM\n" in l:
+                delete_index.update([i, i + 1])
     # lines = [lines[i] for i in range(len(lines)) if i not in delete_index]
+    if tend is None:
+        tend = TIME_END
     with open(tpth, "w", encoding="utf-8") as f:
         for ln, line in enumerate(lines):
             if ln in delete_index:
+                if "RPTSUM" in line:
+                    f.write(line)
+                    prop_names = lines[ln+1].split('/')[0]
+                    for name in add_props:
+                        prop_names += f" {name}"
+                    prop_names += "/\n"
+                    f.write(prop_names)
+                if "LICENSE\n" in line:
+                    f.write(line)
+                    f.write("'"+LICENSE_PTH+"' /")
+                if "LOADEOS" in line:
+                    f.write(line)
+                    f.write("'"+EOS_PTH+"' /")
                 continue
             if ln == ln_insert_props:
                 # TEMPC
@@ -1807,13 +1839,12 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls, transfrmt_ls: Optional
                     _str += "  /\n"
                     f.write(_str)
                     f.write("\n")  # \n
-            
             if ln == ln_insert_tuning:
                 time = 0.0
                 ts = TSTEP_INIT
-                while time < TIME_END * 365.25:
+                while time < tend * 365.25:
                     tstep_rpt = ts * (
-                        NDTFIRST + time / TIME_END * (NDTEND - NDTFIRST)
+                        NDTFIRST + time / tend * (NDTEND - NDTFIRST)
                     )
                     time += tstep_rpt
                     f.write(f"TUNING\n")
@@ -1821,6 +1852,8 @@ def modify_file(refpth, tpth, tempe_ls, pres_ls, xco2_ls, transfrmt_ls: Optional
                     f.write(f"TIME\n")
                     f.write(f"    {time} /\n")
                     f.write(f"\n")
+            if "LICENSE" in line:
+                f.w
 
             f.write(line)
 

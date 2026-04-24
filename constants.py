@@ -7,6 +7,9 @@ from pathlib import Path
 ORIGIN = (42.690531, 141.376630, 955.0)
 POS_SRC = (42.691753, 141.375653, -400.0)
 
+LICENSE_PTH = r"C:\Users\KentaroAoyama\Documents\mufits\LICENSE.LIC"
+EOS_PTH = r"C:\Users\KentaroAoyama\Documents\mufits\CO2H2O_V3.0.EOS"
+
 # OUTDATED
 POS_SINK = {"A": (42.688814, 141.380509, 955.6),
             "B": (42.689230, 141.375933, 981.0),
@@ -339,9 +342,9 @@ TIME_END = 50.0
 
 # Initial time step (in days)
 TSTEP_MIN = 1.0e-12
-TSTEP_INIT = 220.0/(24.0*3600.0)
+TSTEP_INIT = 300.0/(24.0*3600.0)
 # Maximum time step (days)
-TSTEP_MAX: Optional[float] = 220.0/(24.0*3600.0) # 1.0
+TSTEP_MAX: Optional[float] = 300.0/(24.0*3600.0) # 1.0
 # number of iterations for each TSTEP_MAX
 # 浸透率の異方性を入れる前：
 # NDTFIRST = 10
@@ -368,7 +371,7 @@ DB = Literal["db","duct","brit","idb","ibrit"]
 # TRPT_UNREST = 30.0 # in days unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TEND_UNREST = 30.0 # in years
 
-OUTDIR = r"E:\tarumai2"
+OUTDIR = r"F:\tarumai2"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,
