@@ -1,6 +1,3 @@
-# TODO: 変位ベクトルの空間分布の出力
-# TODO: 高速化
-
 # https://jsdokken.com/dolfinx-tutorial/chapter2/linearelasticity_code.html
 # https://jsdokken.com/dolfinx-tutorial/chapter3/neumann_dirichlet_code.html
 # https://jsdokken.com/dolfinx-tutorial/chapter3/robin_neumann_dirichlet.html
@@ -17,8 +14,7 @@ import pickle
 from pyproj import Transformer
 from shapely.geometry.polygon import Polygon
 
-import pyvista
-from dolfinx import mesh, fem, plot, io, default_scalar_type
+from dolfinx import mesh, fem, default_scalar_type
 from dolfinx.fem import (
     Function,
     Constant,
@@ -27,8 +23,6 @@ from dolfinx.fem import (
     locate_dofs_topological,
 )
 from dolfinx.fem.petsc import LinearProblem
-from dolfinx.io import XDMFFile, VTXWriter
-from dolfinx.geometry import bb_tree, compute_collisions_points, compute_colliding_cells
 from mpi4py import MPI
 import basix.ufl
 from ufl import (
@@ -37,8 +31,6 @@ from ufl import (
     grad,
     inner,
     nabla_div,
-    tr,
-    sqrt,
     Identity,
     Measure,
     TestFunction,
@@ -49,7 +41,6 @@ from ufl import (
     inner,
     lhs,
     rhs,
-    FacetNormal,
 )
 from matplotlib import pyplot as plt
 
@@ -60,6 +51,7 @@ from utils import (stack_from_center,
                    calc_m,
                    load_snap,
                    get_fpth_in_timeseries)
+from monitor import img2mov
 
 class BOUNDS(Enum):
     TOP = auto()
@@ -194,7 +186,8 @@ def load_pt(sumpth: PathLike, cells_gindex: List[int]):
 
 def calc_displacement(ref: PathLike | Tuple[float, np.ndarray, np.ndarray],
                       curpth: PathLike,
-                      savedir: PathLike) -> List[List[float]]:
+                      savedir: PathLike,
+                      t0: float=0.0) -> List[List[float]]:
     # TOP: σ・n=0
     # LATERAL & BOTTOM: u=0
     # pressure and temperature
@@ -206,10 +199,11 @@ def calc_displacement(ref: PathLike | Tuple[float, np.ndarray, np.ndarray],
     else:
         _, p0_ls, t0_ls = load_pt(ref, cells_gindex)
     time, p1_ls, t1_ls = load_pt(curpth, cells_gindex)
+    time += t0
     
     savepth = Path(savedir).joinpath(str(time)+".pkl")
     if savepth.exists():
-        return
+        return time, ()
     makedirs(savedir, exist_ok=True)
 
     V = functionspace(domain, ("Lagrange", 1, (domain.geometry.dim,)))
@@ -257,7 +251,10 @@ def calc_displacement(ref: PathLike | Tuple[float, np.ndarray, np.ndarray],
         a,
         L,
         bcs=bcs,
-        petsc_options={"ksp_type": "preonly", "pc_type": "lu"},
+        petsc_options={"ksp_type": "cg",
+                       "pc_type": "hypre",
+                       "pc_hypre_type": "boomeramg",
+                       "ksp_rtol": 1e-8},  # {"ksp_type": "preonly", "pc_type": "lu"}
         petsc_options_prefix="neumann_dirichlet_",
     )
 
@@ -269,6 +266,8 @@ def calc_displacement(ref: PathLike | Tuple[float, np.ndarray, np.ndarray],
 
     with open(savepth, "wb") as pkf:
         pickle.dump((coords_dof, uh_3d), pkf, pickle.HIGHEST_PROTOCOL)
+
+    return time, (coords_dof, uh_3d)
 
     # # Create plotter and pyvista grid
     # p = pyvista.Plotter()
@@ -287,7 +286,6 @@ def calc_displacement(ref: PathLike | Tuple[float, np.ndarray, np.ndarray],
     #     figure_as_array = p.screenshot("deflection.png")
     # grid.save("tmp.vtk")
 
-    # # TODO: cache file path
     # with XDMFFile(domain.comm, "deformation.xdmf", "w") as xdmf:
     #     xdmf.write_mesh(domain)
     #     uh.name = "Deformation"
@@ -331,7 +329,8 @@ def get_surface_value(coords: np.ndarray,
 def plt_surface_uh(cachepth: PathLike,
                    savedir: PathLike,
                    time: Optional[float]=None,
-                   crator_coods: Optional[Tuple[List[float], List[float]]]=None) -> None:
+                   crator_coods: Optional[Tuple[List[float], List[float]]]=None,
+                   baselines: Optional[Tuple[Tuple[float,float],Tuple[float,float]]]=None) -> None:
     cachepth = Path(cachepth)
     savedir = Path(savedir)
     with open(cachepth, "rb") as pkf:
@@ -374,11 +373,26 @@ def plt_surface_uh(cachepth: PathLike,
         ax.plot(crator_coods[0],
                 crator_coods[1],
                 color="black",
-                alpha=0.5,
-                linestyle="dashed")
+                alpha=0.25,
+                linestyle="dashed",
+                )
+    if baselines is not None:
+        for (x0,y0), (x1,y1) in baselines:
+            ax.scatter([x0,x1],
+                       [y0,y1],
+                       s=15,
+                       c="black",
+                       alpha=0.25,
+                       edgecolors='none')
+            ax.plot([x0,x1],
+                    [y0,y1],
+                    color="black",
+                    alpha=0.5,
+                    linestyle="dashed")
+    ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
-    fig.colorbar(mappable)
+    fig.colorbar(mappable,label="Displacement (cm)")
     fig.savefig(xdir.joinpath(fname), dpi=200)
     plt.clf()
     plt.close()
@@ -393,9 +407,10 @@ def plt_surface_uh(cachepth: PathLike,
                 color="black",
                 alpha=0.5,
                 linestyle="dashed")
+    ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
-    fig.colorbar(mappable)
+    fig.colorbar(mappable,label="Displacement (cm)")
     fig.savefig(ydir.joinpath(fname), dpi=200)
     plt.clf()
     plt.close()
@@ -410,9 +425,10 @@ def plt_surface_uh(cachepth: PathLike,
                 color="black",
                 alpha=0.5,
                 linestyle="dashed")
+    ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
-    fig.colorbar(mappable)
+    fig.colorbar(mappable,label="Displacement (cm)")
     fig.savefig(zdir.joinpath(fname), dpi=200)
     plt.clf()
     plt.close()
@@ -428,9 +444,10 @@ def plt_surface_uh(cachepth: PathLike,
                 color="black",
                 alpha=0.5,
                 linestyle="dashed")
+    ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
-    fig.colorbar(mappable)
+    fig.colorbar(mappable, label="Displacement (cm)")
     fig.savefig(magdir.joinpath(fname), dpi=200)
     plt.clf()
     plt.close()
@@ -444,14 +461,21 @@ def plt_surface_uh_for_dir(cachedir: PathLike) -> None:
     x_crator, y_crator = coords.exterior.xy
     x_crator = [x-x0 for x in x_crator]
     y_crator = [y0-y for y in y_crator]
+    xy_gnss: Dict[str, Tuple[float, float]] = {}
+    for key, (lat,lng) in POS_GNSS.items():
+        x, y = rect_trans.transform(lng, lat)
+        xy_gnss.setdefault(key, (x-x0, y-y0))
     for fpth in cachedir.iterdir():
         if fpth.suffix != ".pkl":
             continue
-        _, time = fpth.stem.split(".")
+        time = float(fpth.stem)
         plt_surface_uh(fpth,
                        cachedir.parent.joinpath("tstep").joinpath("displacement"),
                        time=time,
-                       crator_coods=(x_crator, y_crator))
+                       crator_coods=(x_crator, y_crator),
+                       baselines=((xy_gnss["SW"],xy_gnss["NE"]),
+                                  (xy_gnss["SE"],xy_gnss["NW"]))
+                       )
 
 
 def calc_distance(uh0: np.ndarray, uh1: np.ndarray) -> float:
@@ -522,7 +546,7 @@ def plt_baseline_graph(simdir: PathLike) -> None:
     ax.plot(time_ls, d_nw_se_ls)
     ax.set_xscale("log")
     ax.set_xlabel("Year")
-    ax.set_ylabel("Baseline chagne (cm)")
+    ax.set_ylabel("Baseline change (cm)")
     fig.savefig(outdir.joinpath("d_nw_se.png"), dpi=200)
     plt.clf()
     plt.close()
@@ -531,7 +555,7 @@ def plt_baseline_graph(simdir: PathLike) -> None:
     ax.plot(time_ls, d_ne_sw_ls)
     ax.set_xscale("log")
     ax.set_xlabel("Year")
-    ax.set_ylabel("Baseline chagne (cm)")
+    ax.set_ylabel("Baseline change (cm)")
     fig.savefig(outdir.joinpath("d_ne_sw.png"), dpi=200)
     plt.clf()
     plt.close()
@@ -543,9 +567,15 @@ def calc_displacement_dir(dirpth: PathLike) -> None:
     refpth = fpth_ls.pop(0)
     savedir = dirpth.joinpath("displacement")
     makedirs(savedir, exist_ok=True)
+    time = 0.0
+    t0 = 0.0
+    parent_set = set()
     for fpth in fpth_ls:
         print(fpth)
-        calc_displacement(refpth, fpth, savedir)
+        if fpth.parent not in parent_set:
+            t0 = time
+        time, _ = calc_displacement(refpth, fpth, savedir, t0=t0)
+        parent_set.add(fpth.parent)
     return
 
 if __name__ == "__main__":
@@ -557,85 +587,88 @@ if __name__ == "__main__":
     # end = time()
     # print(f"elapsed time: {end-start} s")
     # calc_uh_timeseries("/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d")
-    # dirpth_ls = [
-    #     # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_10000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
-    #     # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_10000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_10000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_10000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_20000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_25000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_30000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_35000.0_10.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_15000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_20000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_25000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_30000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_35000.0_10.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
-    #     "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
-    #     # TODO: brit条件ｎ
-    #              ]
-    # for dirpth in dirpth_ls:
-    #     calc_uh_timeseries(dirpth)
-    # calc_displacement_dir("/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",)
-    # plt_surface_uh_for_dir("/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d/displacement")
-    # plt_baseline_graph("/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d")
+    dirpth_ls = [
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_10000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_10000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_20000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_25000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_30000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_35000.0_10.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_15000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_20000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_25000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_30000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_35000.0_10.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
+        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
+        # TODO: brit条件
+                 ]
+    for dirpth in dirpth_ls:
+        calc_displacement_dir(dirpth)
+        plt_surface_uh_for_dir(dirpth + "/displacement")
+        img2mov(dirpth+"/tstep/displacement/X/", ftype="displacement")
+        img2mov(dirpth+"/tstep/displacement/Y/", ftype="displacement")
+        img2mov(dirpth+"/tstep/displacement/Z/", ftype="displacement")
+        plt_baseline_graph(dirpth)
+
+    # plt_surface_uh_for_dir("/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d"+"/displacement_lu")
     pass
