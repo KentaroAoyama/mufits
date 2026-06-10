@@ -62,6 +62,45 @@ class PARAMS:
         self.permf_cap: Optional[float] = permf_cap
         self.db: Optional[DB]=db
         self.pfail: Optional[float] = pfail
+    
+    # TODO: TOPO_PROPS
+    def __eq__(self, other):
+        return (
+            isinstance(other, PARAMS)
+            and self.PRES_SRC == other.PRES_SRC
+            and self.SRC_TEMP == other.SRC_TEMP
+            and self.SRC_COMP1T == other.SRC_COMP1T
+            and self.RAIN_AMOUNT == other.RAIN_AMOUNT
+            and self.XCO2_AIR == other.XCO2_AIR
+            and self.TEMP_RAIN == other.TEMP_RAIN
+            and self.VENT_SCALE == other.VENT_SCALE
+            and self.INJ_RATE == other.INJ_RATE
+            and self.CAP_SCALE == other.CAP_SCALE
+            and self.VK == other.VK
+            and self.disperse_magmasrc == other.disperse_magmasrc
+            and self.permf_cap == other.permf_cap
+            and self.db == other.db
+            and self.pfail == other.pfail
+        )
+
+    # TODO: TOPO_PROPS
+    def __hash__(self):
+        return hash((
+            self.PRES_SRC,
+            self.SRC_TEMP,
+            self.SRC_COMP1T,
+            self.RAIN_AMOUNT,
+            self.XCO2_AIR,
+            self.TEMP_RAIN,
+            self.VENT_SCALE,
+            self.INJ_RATE,
+            self.CAP_SCALE,
+            self.VK,
+            self.disperse_magmasrc,
+            self.permf_cap,
+            self.db,
+            self.pfail
+                        ))
 
 
 class PARAMS_VTK:

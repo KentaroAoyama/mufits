@@ -2,17 +2,20 @@
 # https://jsdokken.com/dolfinx-tutorial/chapter3/neumann_dirichlet_code.html
 # https://jsdokken.com/dolfinx-tutorial/chapter3/robin_neumann_dirichlet.html
 
-from typing import Tuple, List, Dict, Callable, Optional
+from typing import Tuple, List, Dict, Callable, Optional, Union
 from os import PathLike, makedirs
 from pathlib import Path
+import pathlib
 from enum import Enum, auto
 from time import time
 
 import numpy as np
 from scipy.interpolate import interpn
+import pandas as pd
 import pickle
 from pyproj import Transformer
 from shapely.geometry.polygon import Polygon
+from tqdm import tqdm
 
 from dolfinx import mesh, fem, default_scalar_type
 from dolfinx.fem import (
@@ -44,14 +47,16 @@ from ufl import (
 )
 from matplotlib import pyplot as plt
 
-from constants import CACHE_DIR, DXYZ, IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT, CRS_DEM, CRS_RECT, ORIGIN, POS_GNSS
+from constants import CACHE_DIR, DXYZ, IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT, CRS_DEM, CRS_RECT, ORIGIN, POS_GNSS, OUTDIR
 from utils import (stack_from_center,
                    stack_from_0,
                    load_topo_ls,
                    calc_m,
                    load_snap,
-                   get_fpth_in_timeseries)
+                   get_fpth_in_timeseries,
+                   dir_to_condition)
 from monitor import img2mov
+from params import PARAMS
 
 class BOUNDS(Enum):
     TOP = auto()
@@ -352,7 +357,8 @@ def plt_surface_uh(cachepth: PathLike,
                                 )
 
     values = values.flatten().reshape((*xx_fine.shape, 3))
-    
+    values *= 100.0
+
     fname = cachepth.stem + ".png"
     if time is not None:
         fname = str(time) + ".png"
@@ -368,7 +374,7 @@ def plt_surface_uh(cachepth: PathLike,
     # X
     fig, ax = plt.subplots()
     ax.invert_yaxis()
-    mappable = ax.pcolormesh(xx_fine, yy_fine, values[:,:,0], vmin=-0.2, vmax=0.2)
+    mappable = ax.pcolormesh(xx_fine, yy_fine, values[:,:,0], vmin=-100.0, vmax=100.0)
     if crator_coods is not None:
         ax.plot(crator_coods[0],
                 crator_coods[1],
@@ -400,13 +406,26 @@ def plt_surface_uh(cachepth: PathLike,
     # Y
     fig, ax = plt.subplots()
     ax.invert_yaxis()
-    mappable = ax.pcolormesh(xx_fine, yy_fine, -values[:,:,1], vmin=-0.2, vmax=0.2)
+    mappable = ax.pcolormesh(xx_fine, yy_fine, -values[:,:,1], vmin=-100.0, vmax=100.0)
     if crator_coods is not None:
         ax.plot(crator_coods[0],
                 crator_coods[1],
                 color="black",
                 alpha=0.5,
                 linestyle="dashed")
+    if baselines is not None:
+        for (x0,y0), (x1,y1) in baselines:
+            ax.scatter([x0,x1],
+                       [y0,y1],
+                       s=15,
+                       c="black",
+                       alpha=0.25,
+                       edgecolors='none')
+            ax.plot([x0,x1],
+                    [y0,y1],
+                    color="black",
+                    alpha=0.5,
+                    linestyle="dashed")
     ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
@@ -418,13 +437,26 @@ def plt_surface_uh(cachepth: PathLike,
     # Z
     fig, ax = plt.subplots()
     ax.invert_yaxis()
-    mappable = ax.pcolormesh(xx_fine, yy_fine, -values[:,:,2], vmin=-0.1, vmax=0.3)
+    mappable = ax.pcolormesh(xx_fine, yy_fine, -values[:,:,2], vmin=10.0, vmax=100.0)
     if crator_coods is not None:
         ax.plot(crator_coods[0],
                 crator_coods[1],
                 color="black",
                 alpha=0.5,
                 linestyle="dashed")
+    if baselines is not None:
+        for (x0,y0), (x1,y1) in baselines:
+            ax.scatter([x0,x1],
+                       [y0,y1],
+                       s=15,
+                       c="black",
+                       alpha=0.25,
+                       edgecolors='none')
+            ax.plot([x0,x1],
+                    [y0,y1],
+                    color="black",
+                    alpha=0.5,
+                    linestyle="dashed")
     ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
@@ -437,7 +469,7 @@ def plt_surface_uh(cachepth: PathLike,
     fig, ax = plt.subplots()
     ax.invert_yaxis()
     mag = np.sqrt(np.square(values).sum(axis=2))
-    mappable = ax.pcolormesh(xx_fine, yy_fine, mag, vmin=0.0, vmax=0.3)
+    mappable = ax.pcolormesh(xx_fine, yy_fine, mag, vmin=0.0, vmax=100.0)
     if crator_coods is not None:
         ax.plot(crator_coods[0],
                 crator_coods[1],
@@ -515,10 +547,43 @@ def get_cachepth_in_timeseries(cachedir: PathLike) -> List[Path]:
     return [time_cachepth[time] for time in sorted(list(time_cachepth.keys()))]
 
 def plt_baseline_graph(simdir: PathLike) -> None:
-    # TODO: 観測値と重ね合わせ
+    
     simdir = Path(simdir)
     cachedir = simdir.joinpath("displacement")
     
+    obsdir = Path("obsdata")
+    obs_ne_sw = pd.read_csv(obsdir.joinpath("気象台 2016_E1-W1.csv"), header=None)
+    obs_nw_se = pd.read_csv(obsdir.joinpath("気象台 2016_N1-S1_annotation.csv"), header=None)
+
+    # load temperature change
+    start = 1999.0 # constant
+    shift = 0.0
+    cachepth = Path(OUTDIR).joinpath("summary").joinpath("unrest").joinpath("param_fumarole_times.pkl")
+    if cachepth.exists():
+        # TODO: test
+        print("exists")
+        with open(cachepth, "rb") as pkf:
+            params_fumarole_times: Dict[Path, Dict[str, Dict[Union[float, str], float]]] = pickle.load(pkf)
+        fprops = None
+        condition = dir_to_condition(simdir)
+        params = PARAMS(
+            temp_src=condition["temp"],
+            comp1t=condition["comp1t"],
+            inj_rate=condition["inj_rate"],
+            perm_vent=condition["perm"],
+            cap_scale=condition["cap_scale"],
+            permf_cap=condition["permf_cap"],
+            vk=condition["vk"],
+            disperse_magmasrc=condition["d"],
+            db=condition["db"],
+            pfail=condition["pfail"])
+        if params_fumarole_times[params].get("Sim.", None) is not None:
+            fprops = params_fumarole_times[params].get("Sim.", None)
+        elif params_fumarole_times[params].get("1819", None) is not None:
+            fprops = params_fumarole_times[params].get("1819", None)
+        if fprops is not None:
+            shift = fprops[300.0]
+
     rect_trans = Transformer.from_crs(CRS_DEM, CRS_RECT, always_xy=True)
     x0, y0 = rect_trans.transform(ORIGIN[1], ORIGIN[0])
     locations: Dict[str, Tuple[float, float]] = {}
@@ -532,9 +597,8 @@ def plt_baseline_graph(simdir: PathLike) -> None:
     time_ls: List[float] = []
     d_nw_se_ls: List[float] = []
     d_ne_sw_ls: List[float] = []
-    for fpth in fpth_ls:
-        print(fpth)
-        time_ls.append(float(fpth.stem) / 365.25)  # day to year
+    for fpth in tqdm(fpth_ls):
+        time_ls.append((float(fpth.stem)-shift)/365.25+start)  # day to year
         d_nw_se, d_ne_sw = calc_baseline(fpth, locations)
         d_nw_se_ls.append(d_nw_se*100.0)  # m to cm
         d_ne_sw_ls.append(d_ne_sw*100.0)  # m to cm
@@ -543,17 +607,38 @@ def plt_baseline_graph(simdir: PathLike) -> None:
     outdir = simdir.joinpath("tstep").joinpath("displacement")
     makedirs(outdir, exist_ok=True)
     fig, ax = plt.subplots()
-    ax.plot(time_ls, d_nw_se_ls)
-    ax.set_xscale("log")
+    ax.plot(time_ls,
+            d_nw_se_ls,
+            color="#808080",
+            label="Sim.")
+    ax.scatter(obs_nw_se[0].tolist(),
+               ((obs_nw_se[1]-obs_nw_se[1][0])*100.0).tolist(),
+               color="#808080",
+               label="Obs.")
+    ax.set_xlim(obs_nw_se[0].min()-shift/365.25-3.0,
+                min((obs_nw_se[0].max()+1.0,
+                     time_ls[-1]))+1.0)
+    # ax.set_xscale("log")
     ax.set_xlabel("Year")
     ax.set_ylabel("Baseline change (cm)")
+    ax.legend(bbox_to_anchor=(1.1, 1), loc='upper left',frameon=False)
     fig.savefig(outdir.joinpath("d_nw_se.png"), dpi=200)
     plt.clf()
     plt.close()
 
     fig, ax = plt.subplots()
-    ax.plot(time_ls, d_ne_sw_ls)
-    ax.set_xscale("log")
+    ax.plot(time_ls,
+            d_ne_sw_ls,
+            color="#808080",
+            label="Sim.")
+    ax.scatter(obs_ne_sw[0].tolist(),
+               ((obs_ne_sw[1]-obs_ne_sw[1][0])*100.0).tolist(),
+               color="#808080",
+               label="Obs.")
+    ax.set_xlim(obs_ne_sw[0].min()-shift-3.0,
+                min((obs_ne_sw[0].max()+1,
+                     time_ls[-1]))+1.0)
+    # ax.set_xscale("log")
     ax.set_xlabel("Year")
     ax.set_ylabel("Baseline change (cm)")
     fig.savefig(outdir.joinpath("d_ne_sw.png"), dpi=200)
@@ -596,79 +681,79 @@ if __name__ == "__main__":
         # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_10000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_10000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",         #! これより下向き
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
         "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_20000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_25000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_30000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_35000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_15000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_20000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_25000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_30000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_35000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",  #! これより上向き
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_20000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_25000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_30000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_35000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_15000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_20000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_25000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_30000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",  #!
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",  #! ↓
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",     #! ↑
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
         # TODO: brit条件
                  ]
     for dirpth in dirpth_ls:
-        calc_displacement_dir(dirpth)
+        print(dirpth)
+        # calc_displacement_dir(dirpth)
         plt_surface_uh_for_dir(dirpth + "/displacement")
-        img2mov(dirpth+"/tstep/displacement/X/", ftype="displacement")
-        img2mov(dirpth+"/tstep/displacement/Y/", ftype="displacement")
-        img2mov(dirpth+"/tstep/displacement/Z/", ftype="displacement")
-        plt_baseline_graph(dirpth)
+        # img2mov(dirpth+"/tstep/displacement/X/", ftype="displacement")
+        # img2mov(dirpth+"/tstep/displacement/Y/", ftype="displacement")
+        # img2mov(dirpth+"/tstep/displacement/Z/", ftype="displacement")
+        # plt_baseline_graph(dirpth)
 
     # plt_surface_uh_for_dir("/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d"+"/displacement_lu")
     pass

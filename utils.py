@@ -314,6 +314,7 @@ def dir_to_condition(cond_dir: PathLike) -> Dict[str, float]:
         if "pf" in s:
             s = s.replace("pf", "")
             _dct.setdefault("pfail", float(s))
+    _dct.setdefault("permf_cap", None)
     _dct.setdefault("vk", False)
     _dct.setdefault("d", False)
     _dct.setdefault("db", None)
@@ -506,8 +507,6 @@ def get_fpth_in_timeseries(simdir: PathLike, ignore_first: bool = False) -> List
             fpth = __dir.joinpath(f"tmp.{fn}.SUM")
             if fpth.exists():
                 __fpth_ls.append(fpth)
-            else:
-                break
         return __fpth_ls
 
     simdir = Path(simdir)
@@ -658,6 +657,8 @@ def plt_topo(
         fpth = basedir.joinpath(str(k))
         fig, ax = plt.subplots()
         mappable = ax.pcolormesh(lngc_ls, latc_ls, np.array(val), cmap="jet")
+        for side in ("top","bottom","right","left"):
+            ax.spines[side].set_visible(False)
         fig.colorbar(mappable=mappable)
         fig.savefig(fpth, dpi=200)
         plt.clf()
@@ -704,6 +705,10 @@ def plt_any_val(
             orientation="vertical",
         )
         pp.set_label(label_name)
+        ax.tick_params(axis='x', labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+        for side in ("top","bottom","right","left"):
+            ax.spines[side].set_visible(False)
         ax.set_aspect("equal")
         fig.savefig(fpth, dpi=200, bbox_inches="tight")
         plt.clf()

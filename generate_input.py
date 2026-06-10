@@ -40,7 +40,8 @@ from utils import (
     calc_ximax,
     generate_simple_vent,
     generate_simple_cap,
-    dir_to_condition
+    dir_to_condition,
+    load_topo_ls
 )
 
 from constants import (
@@ -1900,9 +1901,7 @@ def generate_from_params(
 
     if cache_topo.exists():
         with open(cache_topo, "rb") as pkf:
-            topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos) = pickle.load(
-                pkf
-            )
+            topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos) = load_topo_ls()
     else:
         topo_ls, (xc_m, yc_m, zc_m, lat_2d, lng_2d, srcpos, sinkpos,) = generate_topo(
             DEM_PTH,
@@ -1998,18 +1997,18 @@ def generate_from_params(
         p_lith_ls = generate_plith(topo_ls)
 
     # debug
-    # plt_topo(perm_ls, lat_2d, lng_2d, nxyz, "./debug/perm")
+    # plt_topo(perm_ls[2], lat_2d, lng_2d, (len(DXYZ[0]),len(DXYZ[1]),len(DXYZ[2])), "./debug/perm")
     # plt_airbounds(topo_ls, m_airbounds, lat_2d, lng_2d, nxyz, "./debug/airbounds")
     # relative permeability
     # sattab = calc_sattab(method="None")
 
-    # permx_ls = [mdarcy2si(i) for i in perm_ls[0]] #!
-    # permx_with_nan = np.where(np.array(permx_ls) <= 0, np.nan, np.array(permx_ls)) #!
-    # permz_ls = [mdarcy2si(i) for i in perm_ls[2]]
-    # permz_with_nan = np.where(np.array(permz_ls) <= 0, np.nan, np.array(permz_ls))
-    # print(max(permx_ls), max(permz_ls))
-    # plt_any_val(np.log10(permx_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permx3", r'Log $m^2$', _min=-14, _max=-9) #!
-    # plt_any_val(np.log10(permz_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], nxyz, "debug/permz2", r'Log $m^2$',_min=-14, _max=-9)
+    permx_ls = [mdarcy2si(i) for i in perm_ls[0]] #!
+    permx_with_nan = np.where(np.array(permx_ls) <= 0, np.nan, np.array(permx_ls)) #!
+    permz_ls = [mdarcy2si(i) for i in perm_ls[2]]
+    permz_with_nan = np.where(np.array(permz_ls) <= 0, np.nan, np.array(permz_ls))
+    print(max(permx_ls), max(permz_ls))
+    plt_any_val(np.log10(permx_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], (len(DXYZ[0]),len(DXYZ[1]),len(DXYZ[2])), "debug/permx3", r'Log $m^2$', _min=-14, _max=-9) #!
+    plt_any_val(np.log10(permz_with_nan), stack_from_center(DXYZ[0]), [ORIGIN[2] - i for i in stack_from_0(DXYZ[2])], (len(DXYZ[0]),len(DXYZ[1]),len(DXYZ[2])), "debug/permz2", r'Log $m^2$',_min=-14, _max=-9)
     # for px, pv in zip(permx_ls, permz_ls):
     #     print(px, pv)
 

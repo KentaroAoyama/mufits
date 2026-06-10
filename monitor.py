@@ -243,7 +243,8 @@ def generate_3darr(v_ls, axis) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         )
     return grid_x, grid_y, val_3d
 
-
+# TODO: steamline plot
+# https://matplotlib.org/stable/gallery/images_contours_and_fields/plot_streamplot.html
 def plt_single_cs(grid_x, grid_y, val_3d, idx, prop_name, show_time, vmin, vmax, fpth):
     val2d = val_3d[idx]
     fig, ax = plt.subplots()
@@ -832,7 +833,7 @@ def sanity_check(pth, prop_ls: List = ["TEMPC", "PRES", "COMP1T"]):
     print(badconds)
     
 
-def img2mov(imgdir: PathLike, movdir: PathLike= None, ftype="displacement") -> None:
+def img2mov(imgdir: PathLike, movdir: PathLike= None, ftype="magnetic") -> None:
     imgdir = Path(imgdir)
     if movdir is None:
         movdir = Path(imgdir)
@@ -842,6 +843,8 @@ def img2mov(imgdir: PathLike, movdir: PathLike= None, ftype="displacement") -> N
         fname = pth.name.replace(".png", "")
         if ftype=="displacement":
             fname = fname.replace("tmp.", "")
+            idxdct.setdefault(0, []).append([float(fname), pth])
+        elif ftype=="magnetic":
             idxdct.setdefault(0, []).append([float(fname), pth])
         else:
             _ls: List = fname.split("_")

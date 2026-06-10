@@ -16,6 +16,12 @@ POS_GNSS = {
     "SE": (42.687010,141.380804),
 }
 
+POS_MAGNETIC = {
+    "N": (42.693839,141.377048),
+    "S": (42.687372, 141.376963),
+    
+}
+
 # OUTDATED
 POS_SINK = {"A": (42.688814, 141.380509, 955.6),
             "B": (42.689230, 141.375933, 981.0),
@@ -377,7 +383,7 @@ DB = Literal["db","duct","brit","idb","ibrit"]
 # TRPT_UNREST = 30.0 # in days unrestに限らず, 途中から計算しなおすときにこの間隔にする
 # TEND_UNREST = 30.0 # in years
 
-OUTDIR = "/mnt/e/tarumai2"
+OUTDIR = "/mnt/f/tarumai2"
 CONVERSION_CRITERIA = {"TEMPC": 1.0e-2,
                        "PRES": 1.0e-3,
                        "SAT#GAS": 1.0e-4,

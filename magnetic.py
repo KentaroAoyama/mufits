@@ -1,13 +1,15 @@
 # calculate the magnetic field from tough2 output
 # Butsuri tansa handbook p484
-from typing import Tuple, List, Dict, Literal, Optional
+from typing import Tuple, List, Dict, Literal, Optional, Union
 from pathlib import Path
 from os import PathLike, makedirs
 from math import pi, cos, sin
 from time import time
 
 import numpy as np
+import pandas as pd
 import pickle
+from tqdm import tqdm
 from pyproj import Transformer
 from shapely.geometry.polygon import Polygon
 from matplotlib import pyplot as plt
@@ -19,15 +21,20 @@ from constants import (ORIGIN,
                        IDX_CAP,
                        IDX_CAPVENT,
                        CRS_DEM,
-                       CRS_RECT)
+                       CRS_RECT,
+                       POS_MAGNETIC,
+                       OUTDIR)
 from utils import (load_topo_ls,
                    calc_m,
                    calc_ijk,
                    stack_from_center,
                    stack_from_0,
                    load_snap,
-                   get_fpth_in_timeseries)
+                   get_fpth_in_timeseries,
+                   dir_to_condition)
+
 from monitor import img2mov
+from params import PARAMS
 
 # Constants
 # https://www.s-yamaga.jp/nanimono/chikyu/chijiki-01.htm
@@ -138,10 +145,13 @@ def calc_magnetic_field(curpth: PathLike, savedir: PathLike, t0: float=0.0) -> T
     
     time, t_ls = load_t(curpth, m_ls)
     time += t0
+    savepth = Path(savedir).joinpath(str(time)+".pkl")
+    if savepth.exists():
+        return time, ()
+    
     for m, t in zip(m_ls, t_ls):
         t0 = m_props[m]["T0"]
         m_props[m]["TDIFF"] = t-t0
-    savepth = Path(savedir).joinpath(str(time)+".pkl")
 
     FF = 0.0 * XX_OBS   # initialization of total field 
     for m, prop in m_props.items():
@@ -192,8 +202,8 @@ def calc_magnetic_dir(dirpth: PathLike) -> None:
 
 def plt_surface_magnetic(cachepth: PathLike,
                          savepth: PathLike,
-                         crator_coods: Optional[Tuple[List[float], List[float]]]=None,) -> None:
-    # TODO: plot observation points
+                         crator_coods: Optional[Tuple[List[float], List[float]]]=None,
+                         obs: Dict[str, Tuple[float, float]]=None) -> None:
     cachepth = Path(cachepth)
     savepth = Path(savepth)
     with open(cachepth, "rb") as pkf:
@@ -207,6 +217,12 @@ def plt_surface_magnetic(cachepth: PathLike,
                 color="black",
                 alpha=0.5,
                 linestyle="dashed")
+    # observation points
+    x_ls, y_ls = [], []
+    for _, (x,y) in obs.items():
+        x_ls.append(x)
+        y_ls.append(y)
+    ax.scatter(x_ls, y_ls, s=0.5, c="w")
     ax.tick_params(labelsize=8)
     ax.set_xlabel("X", fontsize=8)
     ax.set_ylabel("Y", fontsize=8)
@@ -225,11 +241,10 @@ def plt_surface_magnetic_for_dir(cachedir: PathLike) -> None:
     x_crator, y_crator = coords.exterior.xy
     x_crator = [x-x0 for x in x_crator]
     y_crator = [y0-y for y in y_crator]
-    xy_gnss: Dict[str, Tuple[float, float]] = {}
-    # TODO: 観測点位置取得
-    # for key, (lat,lng) in POS_GNSS.items():
-    #     x, y = rect_trans.transform(lng, lat)
-    #     xy_gnss.setdefault(key, (x-x0, y-y0))
+    xy_obs: Dict[str, Tuple[float, float]] = {}
+    for key, (lat,lng) in POS_MAGNETIC.items():
+        x, y = rect_trans.transform(lng, lat)
+        xy_obs.setdefault(key, (x-x0, y-y0))
     savedir = cachedir.parent.joinpath("tstep").joinpath("magnetic").joinpath("surface")
     makedirs(savedir, exist_ok=True)
     for fpth in cachedir.iterdir():
@@ -239,93 +254,179 @@ def plt_surface_magnetic_for_dir(cachedir: PathLike) -> None:
         plt_surface_magnetic(fpth,
                              savedir.joinpath(str(time)+".png"),
                              crator_coods=(x_crator, y_crator),
-                            #  baselines=((xy_gnss["SW"],xy_gnss["NE"]),
-                            #             (xy_gnss["SE"],xy_gnss["NW"]))
+                             obs=xy_obs
                              )
+
+def get_cachepth_in_timeseries(cachedir: PathLike) -> List[Path]:
+    cachedir = Path(cachedir)
+    time_cachepth: Dict[float, Path] = {}
+    for fpth in cachedir.iterdir():
+        if fpth.suffix != ".pkl":
+            continue
+        time = float(fpth.stem)
+        time_cachepth.setdefault(time, fpth)
+    return [time_cachepth[time] for time in sorted(list(time_cachepth.keys()))]
+
+def plt_magnetic_graph(simdir: PathLike) -> None:
+    simdir = Path(simdir)
+    cachedir = simdir.joinpath("magnetic")
+    rect_trans = Transformer.from_crs(CRS_DEM, CRS_RECT, always_xy=True)
+    x0, y0 = rect_trans.transform(ORIGIN[1], ORIGIN[0])
+    locations: Dict[str, Tuple[float, float]] = {}
+    for obs_name, (lat, lng) in POS_MAGNETIC.items():
+        x, y = rect_trans.transform(lng, lat)
+        x -= x0
+        y = y0 - y
+        locations.setdefault(obs_name, (x, y))
+    fpth_ls = get_cachepth_in_timeseries(cachedir)
+
+    start = 1999.0 # constant
+    shift = 0.0
+    cachepth = Path(OUTDIR).joinpath("summary").joinpath("unrest").joinpath("param_fumarole_times.pkl")
+    if cachepth.exists():
+        # TODO: test
+        with open(cachepth, "rb") as pkf:
+            params_fumarole_times: Dict[PARAMS, Dict[str, Dict[Union[float, str], float]]] = pickle.load(pkf)
+        fprops = None
+        condition = dir_to_condition(simdir)
+        params = PARAMS(temp_src=condition["temp"],
+               comp1t=condition["comp1t"],
+               inj_rate=condition["inj_rate"],
+               perm_vent=condition["perm"],
+               cap_scale=condition["cap_scale"],
+               permf_cap=condition["permf_cap"],
+               vk=condition["vk"],
+               disperse_magmasrc=condition["d"],
+               db=condition["db"],
+               pfail=condition["pfail"])
+        if params_fumarole_times[params].get("Sim.", None) is not None:
+            fprops = params_fumarole_times[params].get("Sim.", None)
+        elif params_fumarole_times[params].get("1819", None) is not None:
+            fprops = params_fumarole_times[params].get("1819", None)
+        if fprops is not None:
+            shift = fprops[300.0]
+    oname_values = {}
+    for fpth in tqdm(fpth_ls):
+        with open(fpth, "rb") as pkf:
+            (XX_OBS, YY_OBS, _), FF = pickle.load(pkf)
+        for oname, (x,y) in locations.items():
+            dist2 = (XX_OBS - x)**2 + (YY_OBS - y)**2
+            idx = np.unravel_index(np.argmin(dist2), dist2.shape)
+            values: Dict = oname_values.setdefault(oname, {})
+            values.setdefault("time", []).append((float(fpth.stem)-shift)/365.25+start)
+            values.setdefault("mag", []).append(FF[idx[0]][idx[1]])
+    
+    # plot
+    outdir = simdir.joinpath("tstep").joinpath("magnetic")
+    makedirs(outdir, exist_ok=True)
+    obsdir = Path("obsdata")
+
+    for oname, values in oname_values.items():
+        # N: 橋本ほか2018_全磁力_北側
+        # S: 橋本ほか2018_全磁力_南側
+        fig, ax = plt.subplots()
+        obspth = obsdir.joinpath(f"{oname}.csv")
+        obsdata = pd.read_csv(obspth, header=None)
+        time_ls = values["time"]
+        mag = values["mag"]
+        ax.plot(time_ls,
+                mag,
+                color="#808080",
+                label="Sim.")
+        ax.scatter(obsdata[0].tolist(),
+                ((obsdata[1]-obsdata[1][0])).tolist(),
+                color="#808080",
+                label="Obs.")
+        ax.set_xlim(obsdata[0].min()-shift/365.25-3.0,
+                    min((obsdata[0].max()+1.0,
+                        time_ls[-1]))+1.0)
+        ax.set_xlabel("Year")
+        ax.set_ylabel("Differential total field (nT)")
+        ax.legend(bbox_to_anchor=(1.1, 1), loc='upper left',frameon=False)
+        fig.savefig(outdir.joinpath(f"{oname}.png"), dpi=200)
+        print(outdir.joinpath(f"{oname}.png"))
+        plt.clf()
+        plt.close()
+    
+    return
 
 if __name__ == "__main__":
     dirpth_ls = [
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
         "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_10000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_10000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_1000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d",  #!
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
         "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_20000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_25000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_30000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_35000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_15000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_20000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_25000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_30000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_35000.0_10.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_30000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_100000.0_v/unrest/900.0_0.0_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10000.0_v/unrest/900.0_0.0_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_20000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_25000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_30000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_100000.0_v/unrest/900.0_0.1_35000.0_10.0_100000.0_v_d",  #!
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_15000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_20000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_25000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_30000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10.0_v/unrest/900.0_0.1_35000.0_10.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_1000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_15000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_20000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_25000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_30000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_100000.0_v/unrest/900.0_0.1_35000.0_10000.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_15000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_20000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_25000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_30000.0_10000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
         # TODO: brit条件
                  ]
-    # for dirpth in dirpth_ls:
-    #     calc_magnetic_dir(dirpth)
-    #     plt_surface_magnetic_for_dir(dirpth + "/magnetic")
-    #     img2mov(dirpth+"/tstep/magnetic/surface", ftype="magnetic")
-  
-    for m in m_props:
-        m_props[m]["T0"] = 0.0
-    calc_magnetic_field("tmp.0028.SUM", "tmp")
-    plt_surface_magnetic_for_dir("./tmp")
+    for dirpth in dirpth_ls:
+        # calc_magnetic_dir(dirpth)
+        # plt_surface_magnetic_for_dir(dirpth + "/magnetic")
+        # img2mov(dirpth+"/tstep/magnetic/surface", ftype="magnetic")
+        plt_magnetic_graph(dirpth)
     pass
