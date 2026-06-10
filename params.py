@@ -1,5 +1,6 @@
+from typing import Optional
 from copy import deepcopy
-from constants import TOPO_CONST_PROPS, IDX_AIR
+from constants import TOPO_CONST_PROPS, IDX_AIR, DB
 from utils import calc_infiltration
 
 class PARAMS:
@@ -13,9 +14,12 @@ class PARAMS:
         temp_rain: float = TOPO_CONST_PROPS[IDX_AIR]["TEMPC"],
         perm_vent: float = 10.0,
         inj_rate: float = 2000.0,
-        cap_scale: float = None,
+        cap_scale: Optional[float] = None,
         vk: bool = False,
-        disperse_magmasrc: bool = False
+        disperse_magmasrc: bool = False,
+        permf_cap: Optional[float] = None,
+        db: Optional[DB]=None,
+        pfail: Optional[float] = None,
     ) -> None:
         """Parameters
 
@@ -28,7 +32,11 @@ class PARAMS:
             temp_rain (float): Temperature of rain sources (℃).
             perm_vent (float): Factor multiplied by the permeability of the host rock.
             inj_rate (float): Injection rate (t/day)
+            permf_cap (float)
         """
+        if db is not None:
+            assert db in ("db","duct","brit","idb","ibrit"), db
+
         # Source properties
         self.PRES_SRC = pres_src
         self.SRC_TEMP = temp_src
@@ -47,11 +55,52 @@ class PARAMS:
         self.INJ_RATE = inj_rate
 
         # cap properties
-        self.CAP_SCALE: float = cap_scale
+        self.CAP_SCALE: Optional[float] = cap_scale
 
         self.VK: bool = vk
         self.disperse_magmasrc: bool = disperse_magmasrc
+        self.permf_cap: Optional[float] = permf_cap
+        self.db: Optional[DB]=db
+        self.pfail: Optional[float] = pfail
+    
+    # TODO: TOPO_PROPS
+    def __eq__(self, other):
+        return (
+            isinstance(other, PARAMS)
+            and self.PRES_SRC == other.PRES_SRC
+            and self.SRC_TEMP == other.SRC_TEMP
+            and self.SRC_COMP1T == other.SRC_COMP1T
+            and self.RAIN_AMOUNT == other.RAIN_AMOUNT
+            and self.XCO2_AIR == other.XCO2_AIR
+            and self.TEMP_RAIN == other.TEMP_RAIN
+            and self.VENT_SCALE == other.VENT_SCALE
+            and self.INJ_RATE == other.INJ_RATE
+            and self.CAP_SCALE == other.CAP_SCALE
+            and self.VK == other.VK
+            and self.disperse_magmasrc == other.disperse_magmasrc
+            and self.permf_cap == other.permf_cap
+            and self.db == other.db
+            and self.pfail == other.pfail
+        )
 
+    # TODO: TOPO_PROPS
+    def __hash__(self):
+        return hash((
+            self.PRES_SRC,
+            self.SRC_TEMP,
+            self.SRC_COMP1T,
+            self.RAIN_AMOUNT,
+            self.XCO2_AIR,
+            self.TEMP_RAIN,
+            self.VENT_SCALE,
+            self.INJ_RATE,
+            self.CAP_SCALE,
+            self.VK,
+            self.disperse_magmasrc,
+            self.permf_cap,
+            self.db,
+            self.pfail
+                        ))
 
 
 class PARAMS_VTK:

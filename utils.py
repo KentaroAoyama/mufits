@@ -1,26 +1,18 @@
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Literal, BinaryIO
+import struct
 from pathlib import Path
 from os import PathLike, makedirs
-from math import log10, log
+from math import log10, log, isnan
 from copy import deepcopy
 
 import numpy as np
-import pandas as pd
 from scipy.integrate import quad
-from pyproj import Transformer
 import pickle
 from matplotlib import pyplot as plt
-from lxml import etree
-import rasterio
-from rasterio.transform import from_bounds
+from pyproj import Transformer
+from shapely import Polygon, Point
 
 from constants import (
-    RockType,
-    DEM_CRS,
-    RECT_CRS,
-    ORIGIN,
-    XYZPTH,
-    DEMPTH,
     DXYZ,
     P_GROUND,
     P_GRAD_AIR,
@@ -28,12 +20,19 @@ from constants import (
     DXYZ,
     RAIN_AMOUNT,
     EVAP_AMOUNT,
+    RIVERS,
     MIA,
     MIB,
-    XYZ,
-    BASEDIR,
+    ORIGIN,
+    IDX_VENT,
+    IDX_CAP,
+    IDX_CAPVENT,
+    CRS_WGS84,
+    CRS_RECT,
+    DB
 )
 
+ENCODING = "windows-1251"
 
 def calc_ijk(m: int, nx: int, ny: int) -> Tuple[int]:
     """Convert global index m to indecies in X-, Y-, and Z-direction (i, j, k)
@@ -67,32 +66,39 @@ def calc_m(i: int, j: int, k: int, nx: int, ny: int) -> int:
     return nx * ny * k + nx * j + i
 
 
-def stack_from_0(_ls: List[float]) -> List[float]:
+def stack_from_0(_ls: List[float], centroid=True) -> List[float]:
     """Generate a list containing the center coordinates of the grid from
     the list containing the grid spacing. The element with index 0 is the origin.
 
     Args:
         _ls (List[float]): 1d list containing the grid spacing
-
+        centroid (Optional[bool]): Returns centroid of coordinate if True
     Returns:
         List[float]: 1d list containing the center coordinates of the grid
     """
     c_ls = []
     for i, _d in enumerate(_ls):
         if len(c_ls) == 0:
-            c_ls.append(abs(_d) * 0.5)
+            if centroid:
+                c_ls.append(abs(_d) * 0.5)
+            else:
+                c_ls.append(0.0)
             continue
-        c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+        if centroid:
+            c_ls.append(c_ls[-1] + _ls[i - 1] * 0.5 + abs(_d) * 0.5)
+        else:
+            c_ls.append(sum(_ls[:i]))
     return c_ls
 
 
-def stack_from_center(_ls: List[float]) -> List[float]:
+def stack_from_center(_ls: List[float], centroid=True) -> List[float]:
     """Generate a list containing the center coordinates of the grid from
     the list containing the grid spacing. The element whose index is in 
     the center is assumed to be the origin.
 
     Args:
         _ls (List[float]): 1d list containing the grid spacing
+        centroid (Optional[bool]): Returns centroid of coordinate if True
 
     Returns:
         List[float]: 1d list containing the center coordinates of the grid
@@ -105,9 +111,13 @@ def stack_from_center(_ls: List[float]) -> List[float]:
         sum_left = -sum(_ls[:_lhalf]) + 0.5 * _ls[_lhalf]
     c_ls: List = []
     for _d in _ls:
-        sum_left += _d * 0.5
-        c_ls.append(sum_left)
-        sum_left += _d * 0.5
+        if centroid:
+            sum_left += _d * 0.5
+            c_ls.append(sum_left)
+            sum_left += _d * 0.5
+        else:
+            c_ls.append(sum_left)
+            sum_left += _d
     return c_ls
 
 
@@ -147,6 +157,7 @@ def calc_kh(z0: float, z1: float) -> float:
     # return (_kh_i(z1, A, B) - _kh_i(z0, A, B)) / (z1 - z0) / 9.869233 * 1.0e16
     return quad(calc_k_z, z0, z1)[0] / (z1 - z0)
 
+
 def _kz_inv(z: float) -> float:
     assert z > 0.0
     return 1.0 / calc_k_z(z)
@@ -174,9 +185,64 @@ def calc_kv(z0: float, z1: float) -> float:
     # return 1.0 / bottom /  9.869233 * 1.0e16
     return (z1 - z0) / quad(_kz_inv, z0, z1)[0]
 
-def simulation_dir(sim_id: str) -> Path:
-    base_dir = Path(BASEDIR)
-    return base_dir.joinpath(str(sim_id))
+
+def condition_to_dir(
+    base_dir: PathLike,
+    tempe_src: float,
+    comp1t: float,
+    inj_rate: float,
+    perm: float,
+    cap_scale: float = None,
+    from_latest: bool = False,
+    vk: bool = False,
+    disperse_magmasrc: bool = False,
+    permf_cap: Optional[float] = None,
+    db: Optional[DB]=None,
+    pfail: Optional[float]=None
+) -> PathLike:
+    """Convert simulation condition to directory name
+
+    Args:
+        base_dir (PathLike): Parent directory of each condition 
+            (.../{base_dir}/{condition})
+        tempe_src (float): Source temperature (℃)
+        comp1t (float): Molar fraction of CO2 in source
+        inj_rate (float): Injected fluid rate from bottom (t/day)
+        perm (float): Permeability ratio: conduit / host rock
+        cap_scale (float): Permeability ratio: (cap rock top) / (default cap rock: 10^-17)
+            If None, cap rock is not set.
+        from_latest (bool): Controls whether to compute from latest 
+            SUM file or not (True: compute from latest SUM file)
+        vk (bool): Controls wheter to set high permeability only on 
+            Z-axis or not (True: high permeability will only be set on Z-axis).
+        disperse_magmasrc (bool): Controls wheter to inject magmatic
+            fluid from multiple bottom blocks (True: inject from multiple blocks)
+
+    Returns:
+        PathLike: Directory path containing single simulation condition
+    """
+    base_dir = Path(base_dir)
+    name = f"{tempe_src}_{comp1t}_{inj_rate}_{perm}"
+    if cap_scale is not None:
+        name += f"_{cap_scale}"
+    if vk:
+        name += "_v"
+    if disperse_magmasrc:
+        name += "_d"
+    if permf_cap is not None:
+        name += f"_dyn{permf_cap}"
+    if db is not None:
+        name += f"_{db}"
+    if pfail is not None:
+        name += f"_pf{pfail}"
+    sim_dir = base_dir.joinpath(name)
+    if not from_latest:
+        return sim_dir
+    for i in range(1, 1000):
+        sim_dir_tmp = sim_dir.joinpath(f"ITER_{i}")
+        if not sim_dir_tmp.exists():
+            break
+    return sim_dir_tmp
 
 
 def unrest_dir(sim_dir: PathLike) -> Path:
@@ -193,8 +259,280 @@ def unrest_dir(sim_dir: PathLike) -> Path:
     return unrest_dir
 
 
+def dir_to_condition(cond_dir: PathLike) -> Dict[str, float]:
+    """Convert directory name to simulation condition
+    (assumed directory name was generated by condition_to_dir)
+
+    Args:
+        cond_dir (PathLike): Directory containing simulation results
+
+    Returns:
+        Dict[str, float]: Dictionary whose keys are condition name and 
+            values are parameter values.
+    """
+    conds_str = str(Path(cond_dir).name).split("_")
+    _dct: Dict = {}
+    _dct.setdefault("temp", conds_str[0])
+    _dct.setdefault("comp1t", conds_str[1])
+    _dct.setdefault("inj_rate", conds_str[2])
+    _dct.setdefault("perm", conds_str[3])
+    # cap scale
+    _dct.setdefault("cap_scale", None)
+    if len(conds_str) > 4:
+        if isinstance(conds_str[4], float):
+            _dct["cap_scale"] = conds_str[4]
+    for s in conds_str:
+        if "dyn" in s:
+            s = s.replace("dyn", "")
+            _dct.setdefault("permf_cap", float(s))
+        if s=="d":
+             _dct.setdefault("d", True)
+        if s=="v":
+            _dct.setdefault("vk", True)
+        if s == "duct":
+            _dct.setdefault("db", "duct")
+        if s == "brit":
+            _dct.setdefault("db", "brit")
+        if s == "db":
+            _dct.setdefault("db", "db")
+        if s == "ibrit":
+            _dct.setdefault("db", "ibrit")
+        if s == "idb":
+            _dct.setdefault("db", "idb")
+        if "pf" in s:
+            s = s.replace("pf", "")
+            _dct.setdefault("pfail", float(s))
+    _dct.setdefault("permf_cap", None)
+    _dct.setdefault("vk", False)
+    _dct.setdefault("d", False)
+    _dct.setdefault("db", None)
+    _dct.setdefault("pfail", None)
+    return _dct
+
+def load_sum(fpth: PathLike, only_time=False) -> Tuple[Dict, Dict, float]:
+    fpth = Path(fpth)
+    with open(fpth, "rb") as f:
+        cellid_props: Dict = {}
+        srcid_props: Dict = {}  # not load for now
+        time: float = None
+        while f.readable():
+            # get the name
+            b = f.read(8)
+            name = b.decode(encoding=ENCODING)
+            if name in "BINARY":
+                f.read(8)
+                continue
+            if name in "HMDSPEC":
+                f.read(8)
+                continue
+            # Record TIME
+            if name == "TIME    ":
+                _ = f.read(8)  # 16 (int)
+                # time value
+                b = f.read(8)
+                time = struct.unpack("d", b)[0]
+                if only_time:
+                    return time
+                b = f.read(8)
+                continue
+            # Block CELLDATA
+            # contains "ARRAYS" and "DATA"
+            if name == "CELLDATA":
+                # ARRAYS
+                no, props_ls = read_Array(f)
+                # DATA
+                b = f.read(8)
+                # Record length
+                b = f.read(8)
+                read_DATA(f, no, props_ls, cellid_props)
+                break
+            # Block SRCDATA
+            # contains "ARRAYS" and "DATA"
+            if "SRCDATA" in name:
+                # ARRAYS
+                no, props_ls = read_Array(f)
+                # DATA
+                b = f.read(8)
+                # Record length
+                b = f.read(8)
+                read_DATA(f, no, props_ls, srcid_props)
+                break
+            if "ENDFILE" in name:
+                break
+    return cellid_props, srcid_props, time
+
+
+def load_snap(sumpth: PathLike, prop_names: List[str]) -> List[Tuple[float, List[float]]]:
+    sumpth = Path(sumpth)
+    cache_dir_base = sumpth.parent.joinpath("cache")
+    exist = True
+    cache_file_ls: List[Path] = []
+    for prop_name in prop_names:
+        cache_file = cache_dir_base.joinpath(prop_name).joinpath(sumpth.stem)
+        exist *= cache_file.exists()
+        cache_file_ls.append(cache_file)
+    props: List[Tuple[float, List[float]]] = []
+    if exist:
+        for cache_file in cache_file_ls:
+            props.append(load_cache(cache_file))
+    else:
+        cellid_props, _, time = load_sum(sumpth)
+        for prop_name, cache_file in zip(prop_names, cache_file_ls):
+            v_ls = get_v_ls(cellid_props, prop_name)
+            prop = (time, v_ls)
+            dump_cache(prop, cache_file)
+            props.append(prop)
+    return props
+
+def dump_cache(prop: Tuple[float, List[float]], cache_pth: PathLike, update=False) -> None:
+    cache_pth = Path(cache_pth)
+    if cache_pth.exists() and not update:
+        return
+    makedirs(cache_pth.parent, exist_ok=True)
+    with open(cache_pth, "wb") as pkf:
+        pickle.dump(prop, pkf, pickle.HIGHEST_PROTOCOL)
+
+def load_cache(cache_file: PathLike) -> Tuple[float, List[float]]:
+    with open(cache_file, "rb") as pkf:
+        data: Tuple[float, List[float]] = pickle.load(pkf)
+    return data
+
+def get_v_ls(props: Dict, prop_name: str) -> List[float]:
+    v_ls: List[float] = list(range(len(props)))
+    for i, (_, prop) in enumerate(props.items()):
+        v = prop[prop_name]
+        assert isinstance(v, float)
+        if isnan(v):
+            v = 0.0
+        v_ls[i] = v
+    return v_ls
+
+def read_Array(f: BinaryIO) -> Tuple[float, List]:
+    props_ls: List = []
+    b = f.read(8)
+    b = f.read(8)
+    # Record length
+    b = f.read(8)
+    # Number of properties
+    b = f.read(4)
+    np: int = struct.unpack("i", b)[0]
+    # Number of objects
+    b = f.read(4)
+    no: int = struct.unpack("i", b)[0]
+    # Property description
+    for _ in range(np):
+        # Tag
+        b = f.read(8)
+        mnemonic: str = b.decode(encoding=ENCODING)
+        b = f.read(8)
+        dimension: str = b.decode(encoding=ENCODING)
+        b = f.read(8)
+        tag_ls = []
+        while "ENDITEM" not in b.decode(encoding=ENCODING):
+            tag_ls.append(b.decode(encoding=ENCODING))
+            b = f.read(8)  # ENDITEM
+        props_ls.append((mnemonic, dimension, tag_ls))
+    return no, props_ls
+
+
+def read_DATA(f: BinaryIO, no: int, props_ls: List, cellid_props: Dict) -> Dict:
+    for _ in range(no):
+        cellid: int = None
+        for prop in props_ls:
+            prop_name, _, tag_ls = prop
+            v = None
+            flag_int1, flag_int2, flag_int4, flag_char8 = False, False, False, False
+            for _s in tag_ls:
+                if "INT1" in _s:
+                    flag_int1 = True
+                    continue
+                if "INT2" in _s:
+                    flag_int2 = True
+                    continue
+                if "INT4" in _s:
+                    flag_int4 = True
+                    continue
+                if "CHAR8" in _s:
+                    flag_char8 = True
+            if flag_int1:
+                b = f.read(1)
+                v = struct.unpack("b", b)[0]
+            elif flag_int2:
+                b = f.read(2)
+                v = struct.unpack("h", b)[0]
+            elif flag_int4:
+                b = f.read(4)
+                v = struct.unpack("i", b)[0]
+            elif flag_char8:
+                b = f.read(8)
+                v = b.decode(encoding=ENCODING)
+            else:
+                b = f.read(8)
+                v = struct.unpack("d", b)[0]
+            if "CELLID" in prop_name:
+                # set id
+                cellid = v
+            elif "SRCNAME" in prop_name:
+                # set id
+                cellid = v
+            else:
+                # Set cellid_props
+                _props: Dict = cellid_props.setdefault(cellid, {})
+                prop_name = prop_name.replace(" ", "")
+                _props.setdefault(prop_name, v)
+    # ENDDATA
+    b = f.read(8)
+    b = f.read(8)  # 0
+    return cellid_props
+
+def get_fpth_in_singledir(dirpth: PathLike,
+                          ignore_first: bool=False) -> List[Path]:
+    dirpth = Path(dirpth)
+    fpth_ls = []
+    for i in range(10000):
+        if ignore_first and i == 0:
+            continue
+        fn = str(i).zfill(4)
+        fpth = dirpth.joinpath(f"tmp.{fn}.SUM")
+        if fpth.exists():
+            fpth_ls.append(fpth)
+    return fpth_ls
+
+def get_fpth_in_timeseries(simdir: PathLike,
+                           ignore_first: bool = False) -> List[Path]:
+
+    simdir = Path(simdir)
+    fpth_ls: List = get_fpth_in_singledir(simdir, ignore_first=ignore_first)
+
+    for i in range(1, 10000):
+        _dirpth = simdir.joinpath(f"ITER_{i}")
+        if _dirpth.exists():
+            fpth_ls.extend(get_fpth_in_singledir(_dirpth,
+                                                 ignore_first=ignore_first))   
+    return fpth_ls
+
+def get_sumpth_time(sumpth: PathLike) -> float:
+    # return time in days
+    sumpth = Path(sumpth)
+    iterated = False
+    itern = 0
+    if "ITER" in sumpth.parent.name:
+        itern = int(sumpth.parent.name.split("_")[1])
+        iterated = True
+    condition_dir = sumpth.parent
+    if iterated:
+        condition_dir = condition_dir.parent
+    dirpth_ls: List[Path] = [condition_dir]
+    for i in range(itern):
+        dirpth_ls.append(condition_dir.joinpath(f"ITER_{i+1}"))
+    time = 0.0
+    for dirpth in dirpth_ls:
+        fpth_ls = get_fpth_in_singledir(dirpth)
+        time += load_sum(fpth_ls[-1], only_time=True)
+    return time
+
 def calc_press_air(elv: float) -> float:
-    """Calculate air pressure in Pa
+    """Calculate air pressure in MPa
 
     Args:
         elv (float): Elevation (m)
@@ -218,160 +556,94 @@ def calc_xco2_rain(ptol: float, xco2_air: float) -> float:
     pco2 = ptol * xco2_air
     return pco2 / Kh
 
-# TODO: remake
-# def calc_infiltration(
-#     rain_amount: float = None, evap_amount: float = None, rivers: Dict = None
-# ) -> float:
-#     """Calculate infiltration (precipitation) rate
 
-#     Args:
-#         rain_amount (float, optional): Total rain fall (m/year). Defaults to None.
-#         evap_amount (float, optional): Total evaporation (m/year). Defaults to None.
-#         rivers (Dict, optional): River properties. Defaults to None.
+def calc_infiltration(
+    rain_amount: float = None, evap_amount: float = None, rivers: Dict = None
+) -> float:
+    """Calculate infiltration (precipitation) rate
 
-#     Returns:
-#         float: Infiltration rate (m/days)
-#     """
-#     if rain_amount is None:
-#         rain_amount = deepcopy(RAIN_AMOUNT)
-#     if evap_amount is None:
-#         evap_amount = EVAP_AMOUNT
-#     if rivers is None:
-#         rivers = deepcopy(RIVERS)
-#     # return rain_amount * 0.0 / 365.25 #! set 0
-#     days = 365.25
-#     area = sum(DXYZ[0]) * sum(DXYZ[1])
-#     rain_total = area * rain_amount / days
-#     evap_total = area * evap_amount / days
+    Args:
+        rain_amount (float, optional): Total rain fall (m/year). Defaults to None.
+        evap_amount (float, optional): Total evaporation (m/year). Defaults to None.
+        rivers (Dict, optional): River properties. Defaults to None.
 
-#     with open("./analyse_river/river_inout_areas.pkl", "rb") as pkf:
-#         rivers_inout: Dict = pickle.load(pkf)
+    Returns:
+        float: Infiltration rate (m/days)
+    """
+    if rain_amount is None:
+        rain_amount = deepcopy(RAIN_AMOUNT)
+    if evap_amount is None:
+        evap_amount = EVAP_AMOUNT
+    if rivers is None:
+        rivers = deepcopy(RIVERS)
+    # return rain_amount * 0.0 / 365.25 #! set 0
+    days = 365.25
+    area = sum(DXYZ[0]) * sum(DXYZ[1])
+    rain_total = area * rain_amount / days
+    evap_total = area * evap_amount / days
 
-#     rivers_total: float = 0.0
-#     for river_name, (rarea, h) in rivers.items():
-#         if river_name in rivers_inout:
-#             inout = rivers_inout[river_name]
-#             in_area, out_area = inout[0], inout[1]
-#             rivers_total += h * in_area
-#             # print(river_name, (rarea - (in_area + out_area)) / rarea)
-#     rivers_total /= days
-#     return (rain_total - evap_total - rivers_total) / area
+    with open("./analyse_river/river_inout_areas.pkl", "rb") as pkf:
+        rivers_inout: Dict = pickle.load(pkf)
 
-def demxml2tif(dempth: PathLike, tif_pth: Optional[PathLike]=None):
-    # https://skyrail.tech/archives/860
-    xml_path = Path(dempth)
-    tif_pth: Path
-    if tif_pth is None:
-        tif_pth = xml_path.parent.joinpath(xml_path.stem + ".tif")
+    rivers_total: float = 0.0
+    for river_name, (rarea, h) in rivers.items():
+        if river_name in rivers_inout:
+            inout = rivers_inout[river_name]
+            in_area, out_area = inout[0], inout[1]
+            rivers_total += h * in_area
+            # print(river_name, (rarea - (in_area + out_area)) / rarea)
+    rivers_total /= days
+    return (rain_total - evap_total - rivers_total) / area
 
-    # --- XMLをパース ---
-    parser = etree.XMLParser(recover=True, huge_tree=True)
-    tree = etree.parse(str(xml_path), parser)
-    root = tree.getroot()
-    ns = {"gml": "http://www.opengis.net/gml/3.2"}
+def generate_simple_vent(
+    topo_ls: List, xc_m: List, yc_m: List, elvc_m: List, vent_bounds: Dict
+) -> List:
+    topo_arr: np.ndarray = np.array(topo_ls)
+    xc_m: np.ndarray = np.array(xc_m)
+    yc_m: np.ndarray = np.array(yc_m)
+    elvc_m: np.ndarray = np.array(elvc_m)
+    zc_ls = stack_from_0(DXYZ[2])
+    zc_arr = ORIGIN[2] - np.array(zc_ls)
+    for elvc, bounds in vent_bounds.items():
+        dz = DXYZ[2][np.argmin(np.square(zc_arr - elvc))]
+        filt = (
+            ((elvc - dz * 0.5) < elvc_m)
+            & (elvc_m < (elvc + dz * 0.5))
+            & (bounds[0] - 25.0 < xc_m)
+            & (xc_m < bounds[1] + 25.0)
+            & (bounds[2] - 25.0 < yc_m)
+            & (yc_m < bounds[3] + 25.0)
+        )
+        topo_arr = np.where(filt, IDX_VENT, topo_arr)
+    return topo_arr.tolist()
 
-    # --- グリッドサイズを取得 ---
-    grid_env = root.find(".//gml:GridEnvelope", ns)
-    if grid_env is None:
-        raise ValueError("GridEnvelope が見つかりません")
-    low = grid_env.find("gml:low", ns).text.split()
-    high = grid_env.find("gml:high", ns).text.split()
-    cols = int(high[0]) - int(low[0]) + 1
-    rows = int(high[1]) - int(low[1]) + 1
 
-    # --- 空間範囲を取得 ---
-    envelope = root.find(".//gml:Envelope", ns)
-    lower_corner = list(map(float, envelope.find("gml:lowerCorner", ns).text.split()))
-    upper_corner = list(map(float, envelope.find("gml:upperCorner", ns).text.split()))
-
-    # GMLは lat lon の順なので、ここで逆にして代入
-    min_lat, min_lon = lower_corner
-    max_lat, max_lon = upper_corner
-
-    # --- 標高データを取得 ---
-    tuple_list_text = root.find(".//gml:tupleList", ns).text.strip()
-    elevations_flat = [float(line.split(",")[1]) for line in tuple_list_text.splitlines()]
-    elevations = np.array(elevations_flat).reshape((rows, cols))
-
-    # --- アフィン変換行列を計算 ---
-    transform = from_bounds(min_lon, min_lat, max_lon, max_lat, cols, rows)
-
-    # --- GeoTIFFとして保存 ---
-    with rasterio.open(
-        tif_pth,
-        "w",
-        driver="GTiff",
-        height=rows,
-        width=cols,
-        count=1,
-        dtype=elevations.dtype,
-        crs=DEM_CRS,
-        transform=transform,
-    ) as dst:
-        dst.write(elevations, 1)
-
-def load_geotiff(tiffpth: PathLike) -> Tuple[List[float], List[float], List[float]]:
-    with rasterio.open(tiffpth) as src:
-        transform = src.transform
-        
-        # データの読み込み
-        data = src.read(1)  # 最初のバンドを取得
-        height, width = data.shape
-        
-    # x, y座標の作成
-    x_coords = np.arange(width) * transform[0] + transform[2]
-    y_coords = np.arange(height) * transform[4] + transform[5]
-    
-    # メッシュグリッドを作成
-    x, y = np.meshgrid(x_coords, y_coords)
-    
-    # z値はデータそのもの
-    z: np.ndarray = data
-    
-    # x, y, zの座標を1次元化
-    x = x.flatten()
-    y = y.flatten()
-    z = z.flatten()
-
-    return x.tolist(), y.tolist(), z.tolist()
-
-def load_dem(xyzpth: PathLike) -> Tuple[List[float], List[float], List[float]]:
-    # return rectangular coordinates
-    df = pd.read_csv(xyzpth, sep=" ", header=None)
-    x_ls = df[0].tolist()  # easting
-    y_ls = df[1].tolist()  # northing
-    z_ls = df[2].tolist()  # elevation
-    return x_ls, y_ls, z_ls
-
-def demxml2xyz(xyzpth: PathLike=XYZPTH, xmldir: Optional[PathLike]=DEMPTH) -> Tuple[List[float], List[float], List[float]]:
-    xyzpth = Path(xyzpth)
-    if not xyzpth.exists():
-        assert xmldir is not None
-        xmldir = Path(xmldir)
-        print("load xml file")
-        for xmlpth in xmldir.glob("*.xml"):
-            print(str(xmlpth))
-            demxml2tif(xmlpth)
-        lng_ls, lat_ls, z_ls = [], [], []
-        print("load tiff file")
-        for tifpth in xmldir.glob("*.tif"):
-            print(str(tifpth))
-            lng_ls_tmp, lat_ls_tmp, z_ls_tmp = load_geotiff(tifpth)
-            for lng, lat, z in zip(lng_ls_tmp, lat_ls_tmp, z_ls_tmp):
-                if z < -9000.0:
-                    continue
-                lng_ls.append(lng)
-                lat_ls.append(lat)
-                z_ls.append(z)
-        rect_trans = Transformer.from_crs(DEM_CRS, RECT_CRS, always_xy=True)
-        x_ls, y_ls = rect_trans.transform(lng_ls, lat_ls)
-        with open(xyzpth, "w") as f:
-            for x, y, z in zip(x_ls, y_ls, z_ls):
-                f.write(f"{x} {y} {z}\n")
-    return load_dem(xyzpth)
+def generate_simple_cap(
+    topo_ls: List,
+    xc_m: List,
+    yc_m: List,
+    elv_cap: float,
+    cap_bounds: Polygon,
+) -> List:
+    zc_ls = stack_from_0(DXYZ[2])
+    zc_arr = ORIGIN[2] - np.array(zc_ls)
+    k = np.argmin(np.square(zc_arr - elv_cap))
+    transformer_wgs = Transformer.from_crs(CRS_WGS84, CRS_RECT, always_xy=True)
+    x0, y0 = transformer_wgs.transform(ORIGIN[1], ORIGIN[0])
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
+    for i in range(nx):
+        for j in range(ny):
+            m = calc_m(i, j, k, nx, ny)
+            xtmp = xc_m[m] + x0
+            ytmp = yc_m[m] + y0
+            if cap_bounds.contains(Point(xtmp, ytmp)):
+                topo_ls[m] = IDX_CAP
+                if topo_ls[calc_m(i, j, k - 1, nx, ny)] == IDX_VENT and k > 0:
+                    topo_ls[m] = IDX_CAPVENT
+    return topo_ls
 
 def plt_topo(
-    val_ls: List[RockType], latc_ls: List, lngc_ls: List, nxyz: Tuple[int], savedir: PathLike
+    topo_ls: List, latc_ls: List, lngc_ls: List, nxyz: Tuple[int], savedir: PathLike
 ):
     """Plot topology (elevation map) for debugging.
 
@@ -385,9 +657,9 @@ def plt_topo(
     """
     nx, ny, nz = nxyz
     topo_3d = np.zeros(shape=(nz, ny, nx)).tolist()
-    for m, v in enumerate(val_ls):
+    for m, idx in enumerate(topo_ls):
         i, j, k = calc_ijk(m, nx, ny)
-        topo_3d[k][j][i] = v
+        topo_3d[k][j][i] = idx
     basedir = Path(savedir)
     if not basedir.exists():
         makedirs(basedir)
@@ -478,6 +750,31 @@ def plt_airbounds(
         plt.close()
 
 
+# def vtu_to_numpy(vtu_file_path):
+#     reader = vtk.vtkXMLUnstructuredGridReader()
+#     reader.SetFileName(vtu_file_path)
+#     reader.Update()
+
+#     cell2point = vtk.vtkCellDataToPointData()
+#     cell2point.SetInputData(reader.GetOutput())
+#     cell2point.Update()
+
+#     data = cell2point.GetOutput()
+#     points = data.GetPoints()
+#     num_points = points.GetNumberOfPoints()
+#     num_arrays = data.GetPointData().GetNumberOfArrays()
+
+#     coordinates = np.array([points.GetPoint(i) for i in range(num_points)])
+
+#     arrays = {}
+#     for i in range(num_arrays):
+#         array = data.GetPointData().GetArray(i)
+#         array_name = array.GetName()
+#         array_data = np.array([array.GetTuple(i) for i in range(num_points)])
+#         arrays[array_name] = array_data
+#     return coordinates, arrays
+
+
 def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
     x0 = 0.0
     x_ls = []
@@ -561,6 +858,8 @@ def plt_result(values, coordinates, vmin, vmax, xlim, ylim, zlim, outdir):
         plt.clf()
         plt.close()
 
+def set_params():
+    return
 
 def si2mdarcy(perm: float) -> float:
     """Convert unit of permeability in SI to darcy
@@ -585,7 +884,41 @@ def mdarcy2si(perm: float) -> float:
     """
     return perm * 9.869233 * 1.0e-16
 
+def calc_ximax(lamda: Optional[float]) -> float:
+    # ξmax(λ) in Afanasyev (2020) (pp.1657, below eq.16)
+    # based on Afanasyev (2020)
+    return 1.0
+
+def calc_eta(T: float, ignore_ulim: bool=False) -> float:
+    # η(T) in Afanasyev (2020) (eq.17, modified)
+    # based on Weis(2015); Afanasyev (2020)
+    Tb = 360.0
+    Td = 500.0
+    if T < Tb:
+        return 0.0
+    elif Tb <= T <= Td or ignore_ulim:
+        return (T - Tb) / (Td - Tb)
+    return 1.0
+
+def calc_D(lamda: float, T: float) -> float:
+    # -log D(λ, T) in Afanasyev (2020) (eq.17, modified)
+    # based on Afanasyev (2020)
+    a = 6.5
+    lamda_min = 0.3
+    eta = calc_eta(T, ignore_ulim=True)
+    coeff = 1.0
+    if lamda >= lamda_min:
+        coeff = (1.0-((lamda-lamda_min)/(1.0-lamda_min))**2)
+    return coeff * eta * a
+
+def calc_F(lamda: float, reversible: bool=True) -> float:
+    # F(T) in Afanasyev (2020) (eq.16) (coefficient is modified)
+    coeff = 1.0
+    if lamda < 1.0 and not reversible:
+        coeff = 0.0
+    elif lamda < 1.0:
+        coeff *= -1.0
+    return coeff * (lamda-1.0)**2
 
 if __name__ == "__main__":
-    print(calc_ijk(60800, 40, 40))
     pass
