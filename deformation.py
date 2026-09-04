@@ -7,6 +7,7 @@ from os import PathLike, makedirs
 from pathlib import Path
 import pathlib
 from enum import Enum, auto
+from copy import deepcopy
 from time import time
 
 import numpy as np
@@ -24,10 +25,13 @@ from dolfinx.fem import (
     functionspace,
     dirichletbc,
     locate_dofs_topological,
+    form,
+    assemble_scalar
 )
 from dolfinx.fem.petsc import LinearProblem
 from mpi4py import MPI
 import basix.ufl
+import ufl
 from ufl import (
     Mesh,
     sym,
@@ -44,14 +48,21 @@ from ufl import (
     inner,
     lhs,
     rhs,
+    SpatialCoordinate,
+    as_vector,
+    div
 )
+from petsc4py import PETSc
 from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
 
 from constants import CACHE_DIR, DXYZ, IDX_LAND, IDX_VENT, IDX_CAP, IDX_CAPVENT, CRS_DEM, CRS_RECT, ORIGIN, POS_GNSS, OUTDIR
 from utils import (stack_from_center,
                    stack_from_0,
                    load_topo_ls,
                    calc_m,
+                   calc_ijk,
                    load_snap,
                    get_fpth_in_timeseries,
                    dir_to_condition)
@@ -160,6 +171,56 @@ def generate_domain_info() -> Tuple[np.ndarray, np.ndarray, BOUNDARIES, List[int
     
     return points, cells, boundaries, cells_gindex
 
+def generate_domain_info_test():
+    dx_ls = [100.0]*100
+    dy_ls = deepcopy(dx_ls)
+    dz_ls = deepcopy(dx_ls)
+    x_ls = stack_from_center(dx_ls, centroid=False)
+    x_ls.append(x_ls[-1]+dx_ls[-1])  # W to E
+    y_ls = stack_from_center(dy_ls, centroid=False)
+    y_ls.append(y_ls[-1]+dy_ls[-1])  # N to S
+    z_ls = stack_from_0(dz_ls, centroid=False)
+    z_ls.append(z_ls[-1]+dz_ls[-1])  # top to bottom
+    nx, ny = len(dx_ls), len(dy_ls)
+    # points
+    points = []
+    point_index = {}
+    cells = []
+    boundaries: List[Tuple[int, Callable]] = []
+    boundaries.append(("lateral",BOUNDS.LATERAL.value, lambda u: np.isclose(u[1], y_ls[0])|np.isclose(u[1], y_ls[-1])|np.isclose(u[0], x_ls[0])|np.isclose(u[0], x_ls[-1])))
+    boundaries.append(("bottom",BOUNDS.BOTTOM.value, lambda u: np.isclose(u[2], z_ls[-1])))
+    boundaries.append(("k-",BOUNDS.TOP.value, lambda u: np.isclose(u[2], z_ls[0])))
+    cells_gindex: List[int] = []  # contains global index m
+    for i in range(len(x_ls)-1):
+        for j in range(len(y_ls)-1):
+            for k in range(len(z_ls)-1):
+                # https://docs.fenicsproject.org/basix/main/
+                points_neighbor = [[x_ls[i],y_ls[j],z_ls[k]],
+                                   [x_ls[i+1],y_ls[j],z_ls[k]],
+                                   [x_ls[i],y_ls[j+1],z_ls[k]],
+                                   [x_ls[i+1],y_ls[j+1],z_ls[k]],
+                                   [x_ls[i],y_ls[j],z_ls[k+1]],
+                                   [x_ls[i+1],y_ls[j],z_ls[k+1]],
+                                   [x_ls[i],y_ls[j+1],z_ls[k+1]],
+                                   [x_ls[i+1],y_ls[j+1],z_ls[k+1]],]
+                idx_element = []
+                for p in points_neighbor:
+                    key = tuple(p)
+                    if key in point_index:
+                        idx_element.append(point_index[key])
+                    else:
+                        idx = len(points)
+                        point_index.setdefault(key, idx)
+                        idx_element.append(idx)
+                        points.append(p)
+                cells.append(idx_element)
+                cells_gindex.append(calc_m(i,j,k,nx,ny))
+
+    points = np.array(points, dtype=np.float64)
+    cells = np.array(cells, dtype=np.int64)
+    
+    return points, cells, boundaries, cells_gindex
+
 def generate_domain() -> Tuple[mesh.Mesh, BOUNDARIES, List[int]]:
     points, cells, boundaries, cells_gindex = generate_domain_info()
     ufl_quad = Mesh(basix.ufl.element("Lagrange", "hexahedron", 1, shape=(3,)))
@@ -180,6 +241,9 @@ def epsilon(u):
 # σ: 3×3
 def calc_sigma(u, dp, dt):
     return lambda_ * nabla_div(u) * Identity(len(u)) + 2.0 * mu * epsilon(u) - alpha * Kd * dt * Identity(len(u)) - beta * dp * Identity(len(u))
+
+def calc_sigma_test(u, dp, dt):
+    return lambda_ * nabla_div(u) * Identity(len(u)) + 2.0 * mu * epsilon(u) - alpha * Kd * dt * Identity(len(u)) - dp * Identity(len(u))
 
 def zeros(u: np.ndarray):
     return 0.0 * u
@@ -546,15 +610,10 @@ def get_cachepth_in_timeseries(cachedir: PathLike) -> List[Path]:
         time_cachepth.setdefault(time, fpth)
     return [time_cachepth[time] for time in sorted(list(time_cachepth.keys()))]
 
-def plt_baseline_graph(simdir: PathLike) -> None:
-    
+def calc_baseline_from_singledir(simdir: PathLike):
+    print(simdir)
     simdir = Path(simdir)
     cachedir = simdir.joinpath("displacement")
-    
-    obsdir = Path("obsdata")
-    obs_ne_sw = pd.read_csv(obsdir.joinpath("気象台 2016_E1-W1.csv"), header=None)
-    obs_nw_se = pd.read_csv(obsdir.joinpath("気象台 2016_N1-S1_annotation.csv"), header=None)
-
     # load temperature change
     start = 1999.0 # constant
     shift = 0.0
@@ -564,26 +623,30 @@ def plt_baseline_graph(simdir: PathLike) -> None:
         print("exists")
         with open(cachepth, "rb") as pkf:
             params_fumarole_times: Dict[Path, Dict[str, Dict[Union[float, str], float]]] = pickle.load(pkf)
+        
         fprops = None
         condition = dir_to_condition(simdir)
-        params = PARAMS(
-            temp_src=condition["temp"],
-            comp1t=condition["comp1t"],
-            inj_rate=condition["inj_rate"],
-            perm_vent=condition["perm"],
-            cap_scale=condition["cap_scale"],
-            permf_cap=condition["permf_cap"],
-            vk=condition["vk"],
-            disperse_magmasrc=condition["d"],
-            db=condition["db"],
-            pfail=condition["pfail"])
-        if params_fumarole_times[params].get("Sim.", None) is not None:
-            fprops = params_fumarole_times[params].get("Sim.", None)
-        elif params_fumarole_times[params].get("1819", None) is not None:
-            fprops = params_fumarole_times[params].get("1819", None)
+        for param, value in params_fumarole_times.items():
+            if not (param.SRC_TEMP == condition["temp"] and
+                    param.SRC_COMP1T == condition["comp1t"] and
+                    param.INJ_RATE == condition["inj_rate"] and
+                    param.VENT_SCALE == condition["perm"] and
+                    param.CAP_SCALE == condition["cap_scale"] and
+                    param.permf_cap == condition["permf_cap"] and
+                    param.VK == condition["vk"] and
+                    param.disperse_magmasrc == condition["d"] and
+                    param.db == condition["db"] and
+                    param.pfail == condition["pfail"]
+                    ):
+                continue
+        if value.get("Sim.", None) is not None:
+            fprops = value.get("Sim.", None)
+        elif value.get("1819", None) is not None:
+            fprops = value.get("1819", None)
         if fprops is not None:
-            shift = fprops[300.0]
-
+            if fprops.get(300.0, None) is not None:
+                shift = fprops[300.0]
+    
     rect_trans = Transformer.from_crs(CRS_DEM, CRS_RECT, always_xy=True)
     x0, y0 = rect_trans.transform(ORIGIN[1], ORIGIN[0])
     locations: Dict[str, Tuple[float, float]] = {}
@@ -602,6 +665,16 @@ def plt_baseline_graph(simdir: PathLike) -> None:
         d_nw_se, d_ne_sw = calc_baseline(fpth, locations)
         d_nw_se_ls.append(d_nw_se*100.0)  # m to cm
         d_ne_sw_ls.append(d_ne_sw*100.0)  # m to cm
+    
+    return (shift, time_ls, d_nw_se_ls, d_ne_sw_ls)
+
+def plt_baseline_graph(simdir: PathLike) -> Tuple[Figure, Axes]:
+    
+    shift, time_ls, d_nw_se_ls, d_ne_sw_ls = calc_baseline_from_singledir(simdir)
+    obsdir = Path("obsdata")
+    obs_ne_sw = pd.read_csv(obsdir.joinpath("気象台 2016_E1-W1.csv"), header=None)
+    obs_nw_se = pd.read_csv(obsdir.joinpath("気象台 2016_N1-S1_annotation.csv"), header=None)
+
 
     # plot
     outdir = simdir.joinpath("tstep").joinpath("displacement")
@@ -646,6 +719,70 @@ def plt_baseline_graph(simdir: PathLike) -> None:
     plt.close()
     return
 
+def plt_baseline_compare_graph(simdirs: List[PathLike]) -> Tuple[Figure, Axes]:
+
+
+    assert len(simdirs)==2
+    shift1, time_ls1, d_nw_se_ls1, d_ne_sw_ls1 = calc_baseline_from_singledir(simdirs[0])
+    shift2, time_ls2, d_nw_se_ls2, d_ne_sw_ls2 = calc_baseline_from_singledir(simdirs[1])
+
+    shift1 = 7124.284000000001/365.25  #!
+    shift2 = 2144.284/365.25  #!
+
+    obsdir = Path("obsdata")
+    obs_ne_sw = pd.read_csv(obsdir.joinpath("気象台 2016_E1-W1.csv"), header=None)
+    obs_nw_se = pd.read_csv(obsdir.joinpath("気象台 2016_N1-S1_annotation.csv"), header=None)
+
+    # plot
+    outdir = Path(simdirs[0]).joinpath("tstep").joinpath("displacement")
+    makedirs(outdir, exist_ok=True)
+    savepth = outdir.joinpath("d_ne_sw_compare.png")
+    print(savepth)
+
+    fig, axes = plt.subplots(1,2)
+    _prepare_ticks(plt, axes)
+    axes[0].plot(time_ls1,
+                 d_nw_se_ls1,
+                 color="#808080",
+                 linestyle="dashed",
+                 label="Sim1")
+    axes[0].plot(time_ls2,
+                 d_nw_se_ls2,
+                 color="#696969",
+                 label="Sim2")
+    axes[0].scatter(obs_nw_se[0].tolist(),
+               ((obs_nw_se[1]-obs_nw_se[1][0])*100.0).tolist(),
+               color="#696969",
+               label="Obs.")
+    axes[0].set_xlim(obs_ne_sw[0].min()-1.0,
+                    obs_ne_sw[0].max()+1.0)
+    # ax.set_xscale("log")
+    axes[0].set_xlabel("Year")
+
+    axes[1].plot(time_ls1,
+            d_ne_sw_ls1,
+            color="#808080",
+            linestyle="dashed",
+            label="Sim1")
+    axes[1].plot(time_ls2,
+                 d_ne_sw_ls2,
+                 color="#696969",
+                 label="Sim2",
+                 )
+    axes[1].scatter(obs_ne_sw[0].tolist(),
+               ((obs_ne_sw[1]-obs_ne_sw[1][0])*100.0).tolist(),
+               color="#696969",
+               label="Obs.")
+    axes[1].set_xlim(obs_ne_sw[0].min()-1.0,
+                    obs_ne_sw[0].max()+1.0)
+    # ax.set_xscale("log")
+    axes[1].set_xlabel("Year")
+    plt.subplots_adjust(wspace=0.3)
+    fig.savefig(outdir.joinpath("d_ne_sw_compare.png"), dpi=200)
+    plt.clf()
+    plt.close()
+    return
+
 def calc_displacement_dir(dirpth: PathLike) -> None:
     dirpth = Path(dirpth)
     fpth_ls = get_fpth_in_timeseries(dirpth, ignore_first=False)
@@ -663,7 +800,507 @@ def calc_displacement_dir(dirpth: PathLike) -> None:
         parent_set.add(fpth.parent)
     return
 
+def mogi_h(a,nu,r,d,dp):
+    # 青木 (2016), eq(23)
+    return (1.0-nu)*a**3*dp/mu*\
+        (1.0+
+         (a/d)**3*((1.0+nu)/(2.0*(-7.0+5.0*nu))+
+                   15.0*d**2*(-2.0+nu)/(4.0*(-7.0+5*nu)*(r**2+d**2))))*\
+        r/(r**2+d**2)**1.5
+
+def mogi_v(a,nu,r,d,dp):
+    # 青木 (2016), eq(22)
+    return (1.0-nu)*a**3*dp/mu*\
+        (1.0+
+         (a/d)**3*((1.0+nu)/(2.0*(-7.0+5.0*nu))+
+                   15.0*d**2*(-2.0+nu)/(4.0*(-7.0+5.0*nu)*(r**2+d**2))))*\
+        d/(r**2+d**2)**1.5
+
+
+def test2():
+    # Method of manufactured solution
+    def u_ufl(x):
+        return ufl.as_vector([x[0]**2, x[1]**2, x[2]**2])
+
+    def u_numpy(x):
+        return np.array([x[0]**2, x[1]**2, x[2]**2])
+
+    points, cells, boundaries, cells_gindex = generate_domain_info()
+    ufl_quad = Mesh(basix.ufl.element("Lagrange", "hexahedron", 1, shape=(3,)))
+    domain = mesh.create_mesh(MPI.COMM_WORLD,
+                              cells=cells,
+                              x=points,
+                              e=ufl_quad)
+    tdim = domain.topology.dim
+    fdim = tdim - 1
+    domain.topology.create_connectivity(fdim, tdim)
+    
+    x = SpatialCoordinate(domain)
+    Q = fem.functionspace(domain, ("DG", 0))
+    dp = fem.Function(Q)
+    dp.x.array[:] = 0.0
+    dt = fem.Function(Q)
+    dt.x.array[:] = 0.0
+    u_ex = u_ufl(x)
+    f = -div(calc_sigma_test(u_ex,dp,dt))
+    
+    facet_indices, facet_markers = [], []
+    fdim = domain.topology.dim - 1
+    for d, marker, locator in boundaries:
+        facets = mesh.locate_entities(domain, fdim, locator)
+        assert facets.shape[0] > 0, (d, marker, facets.shape)
+        facet_indices.append(facets)
+        facet_markers.append(np.full_like(facets, marker))
+    facet_indices = np.hstack(facet_indices).astype(np.int32)
+    facet_markers = np.hstack(facet_markers).astype(np.int32)
+    sorted_facets = np.argsort(facet_indices)
+    facet_tag = mesh.meshtags(
+        domain, fdim, facet_indices[sorted_facets], facet_markers[sorted_facets]
+    )
+    V = functionspace(domain, ("Lagrange", 1, (domain.geometry.dim,)))
+    u, v = TrialFunction(V), TestFunction(V)
+    ds = Measure("ds", domain=domain, subdomain_data=facet_tag)
+    sigma = calc_sigma_test(u,dp,dt)
+    F = inner(sigma, epsilon(v)) * dx - dot(f, v) * dx #  - inner(Constant(domain, default_scalar_type((0, 0, 0))), v) * ds(BOUNDS.TOP.value)
+
+    u_bc = Function(V)
+    u_bc.interpolate(u_numpy)
+    bcs = []
+    for marker in (BOUNDS.LATERAL.value, BOUNDS.BOTTOM.value, BOUNDS.TOP.value):
+        facets = facet_tag.find(marker)
+        dofs = locate_dofs_topological(V, fdim, facets)
+        bcs.append(dirichletbc(u_bc, dofs))
+
+    # Solve linear variational problem
+    a = lhs(F)
+    L = rhs(F)
+
+    problem = LinearProblem(
+        a,
+        L,
+        bcs=bcs,
+        petsc_options={"ksp_type": "cg",
+                       "pc_type": "hypre",
+                       "pc_hypre_type": "boomeramg",
+                       "ksp_rtol": 1e-8},  # {"ksp_type": "preonly", "pc_type": "lu"}
+        petsc_options_prefix="neumann_dirichlet_",
+    )
+
+    uh = problem.solve()
+
+    lu_solver = problem.solver
+    viewer = PETSc.Viewer().createASCII("lu_output.txt")
+    lu_solver.view(viewer)
+    solver_output = open("lu_output.txt", "r")
+    for line in solver_output.readlines():
+        print(line)
+
+    # Error
+    comm = uh.function_space.mesh.comm
+    error = form(ufl.inner(uh - u_ex, uh - u_ex) * ufl.dx)
+    E = np.sqrt(comm.allreduce(assemble_scalar(error), MPI.SUM))
+    if comm.rank == 0:
+        print(f"L2-error: {E:.2e}")
+
+    # save results
+    coords_dof = uh.function_space.tabulate_dof_coordinates()
+    uh_3d = uh.x.array.reshape(coords_dof.shape[0], 3)
+
+    with open("u2dp0dt0.pkl", "wb") as pkf:
+        pickle.dump((coords_dof, uh_3d), pkf, pickle.HIGHEST_PROTOCOL)
+
+    return time, (coords_dof, uh_3d)
+
+def test3():
+    # Method of manufactured solution
+    # dp = x^2
+    def u_ufl(x):
+        return ufl.as_vector([x[0]**2, x[1]**2, x[2]**2])
+
+    def u_numpy(x):
+        return np.array([x[0]**2, x[1]**2, x[2]**2])
+
+    points, cells, boundaries, cells_gindex = generate_domain_info()
+    ufl_quad = Mesh(basix.ufl.element("Lagrange", "hexahedron", 1, shape=(3,)))
+    domain = mesh.create_mesh(MPI.COMM_WORLD,
+                              cells=cells,
+                              x=points,
+                              e=ufl_quad)
+    tdim = domain.topology.dim
+    fdim = tdim - 1
+    domain.topology.create_connectivity(fdim, tdim)
+    
+    x = SpatialCoordinate(domain)
+    Q = fem.functionspace(domain, ("DG", 0))
+    dp = fem.Function(Q)
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
+    xc_ls = stack_from_center(DXYZ[0])
+    dp_ls = []
+    for m in cells_gindex:
+        i,j,k = calc_ijk(m, nx, ny)
+        dp_ls.append(xc_ls[i]**2)
+
+    dp.x.array[:] = np.array(dp_ls)
+    dt = fem.Function(Q)
+    dt.x.array[:] = 0.0
+    u_ex = u_ufl(x)
+    f = -div(calc_sigma_test(u_ex,dp,dt))
+    
+    facet_indices, facet_markers = [], []
+    fdim = domain.topology.dim - 1
+    for d, marker, locator in boundaries:
+        facets = mesh.locate_entities(domain, fdim, locator)
+        assert facets.shape[0] > 0, (d, marker, facets.shape)
+        facet_indices.append(facets)
+        facet_markers.append(np.full_like(facets, marker))
+    facet_indices = np.hstack(facet_indices).astype(np.int32)
+    facet_markers = np.hstack(facet_markers).astype(np.int32)
+    sorted_facets = np.argsort(facet_indices)
+    facet_tag = mesh.meshtags(
+        domain, fdim, facet_indices[sorted_facets], facet_markers[sorted_facets]
+    )
+    V = functionspace(domain, ("Lagrange", 1, (domain.geometry.dim,)))
+    u, v = TrialFunction(V), TestFunction(V)
+    ds = Measure("ds", domain=domain, subdomain_data=facet_tag)
+    sigma = calc_sigma_test(u,dp,dt)
+    F = inner(sigma, epsilon(v)) * dx - dot(f, v) * dx #  - inner(Constant(domain, default_scalar_type((0, 0, 0))), v) * ds(BOUNDS.TOP.value)
+
+    u_bc = Function(V)
+    u_bc.interpolate(u_numpy)
+    bcs = []
+    for marker in (BOUNDS.LATERAL.value, BOUNDS.BOTTOM.value, BOUNDS.TOP.value):
+        facets = facet_tag.find(marker)
+        dofs = locate_dofs_topological(V, fdim, facets)
+        bcs.append(dirichletbc(u_bc, dofs))
+
+    # Solve linear variational problem
+    a = lhs(F)
+    L = rhs(F)
+
+    problem = LinearProblem(
+        a,
+        L,
+        bcs=bcs,
+        petsc_options={"ksp_type": "cg",
+                       "pc_type": "hypre",
+                       "pc_hypre_type": "boomeramg",
+                       "ksp_rtol": 1e-8},  # {"ksp_type": "preonly", "pc_type": "lu"}
+        petsc_options_prefix="neumann_dirichlet_",
+    )
+
+    uh = problem.solve()
+
+    lu_solver = problem.solver
+    viewer = PETSc.Viewer().createASCII("lu_output.txt")
+    lu_solver.view(viewer)
+    solver_output = open("lu_output.txt", "r")
+    for line in solver_output.readlines():
+        print(line)
+
+    # Error
+    comm = uh.function_space.mesh.comm
+    error = form(ufl.inner(uh - u_ex, uh - u_ex) * ufl.dx)
+    E = np.sqrt(comm.allreduce(assemble_scalar(error), MPI.SUM))
+    if comm.rank == 0:
+        print(f"L2-error: {E:.2e}")
+
+    # save results
+    coords_dof = uh.function_space.tabulate_dof_coordinates()
+    uh_3d = uh.x.array.reshape(coords_dof.shape[0], 3)
+
+    with open("u2dp2dt0.pkl", "wb") as pkf:
+        pickle.dump((coords_dof, uh_3d), pkf, pickle.HIGHEST_PROTOCOL)
+
+    return time, (coords_dof, uh_3d)
+
+def test4():
+    # Method of manufactured solution
+    # dt = x^2
+    def u_ufl(x):
+        return ufl.as_vector([x[0]**2, x[1]**2, x[2]**2])
+
+    def u_numpy(x):
+        return np.array([x[0]**2, x[1]**2, x[2]**2])
+
+    points, cells, boundaries, cells_gindex = generate_domain_info()
+    ufl_quad = Mesh(basix.ufl.element("Lagrange", "hexahedron", 1, shape=(3,)))
+    domain = mesh.create_mesh(MPI.COMM_WORLD,
+                              cells=cells,
+                              x=points,
+                              e=ufl_quad)
+    tdim = domain.topology.dim
+    fdim = tdim - 1
+    domain.topology.create_connectivity(fdim, tdim)
+    
+    x = SpatialCoordinate(domain)
+    Q = fem.functionspace(domain, ("DG", 0))
+    dp = fem.Function(Q)
+    dp.x.array[:] = 0.0
+    dt = fem.Function(Q)
+    nx, ny = len(DXYZ[0]), len(DXYZ[1])
+    xc_ls = stack_from_center(DXYZ[0])
+    dt_ls = []
+    for m in cells_gindex:
+        i,j,k = calc_ijk(m, nx, ny)
+        dt_ls.append(xc_ls[i]**2)
+    dt.x.array[:] = np.array(dt_ls)
+    u_ex = u_ufl(x)
+    f = -div(calc_sigma_test(u_ex,dp,dt))
+    
+    facet_indices, facet_markers = [], []
+    fdim = domain.topology.dim - 1
+    for d, marker, locator in boundaries:
+        facets = mesh.locate_entities(domain, fdim, locator)
+        assert facets.shape[0] > 0, (d, marker, facets.shape)
+        facet_indices.append(facets)
+        facet_markers.append(np.full_like(facets, marker))
+    facet_indices = np.hstack(facet_indices).astype(np.int32)
+    facet_markers = np.hstack(facet_markers).astype(np.int32)
+    sorted_facets = np.argsort(facet_indices)
+    facet_tag = mesh.meshtags(
+        domain, fdim, facet_indices[sorted_facets], facet_markers[sorted_facets]
+    )
+    V = functionspace(domain, ("Lagrange", 1, (domain.geometry.dim,)))
+    u, v = TrialFunction(V), TestFunction(V)
+    ds = Measure("ds", domain=domain, subdomain_data=facet_tag)
+    sigma = calc_sigma_test(u,dp,dt)
+    F = inner(sigma, epsilon(v)) * dx - dot(f, v) * dx #  - inner(Constant(domain, default_scalar_type((0, 0, 0))), v) * ds(BOUNDS.TOP.value)
+
+    u_bc = Function(V)
+    u_bc.interpolate(u_numpy)
+    bcs = []
+    for marker in (BOUNDS.LATERAL.value, BOUNDS.BOTTOM.value, BOUNDS.TOP.value):
+        facets = facet_tag.find(marker)
+        dofs = locate_dofs_topological(V, fdim, facets)
+        bcs.append(dirichletbc(u_bc, dofs))
+
+    # Solve linear variational problem
+    a = lhs(F)
+    L = rhs(F)
+
+    problem = LinearProblem(
+        a,
+        L,
+        bcs=bcs,
+        petsc_options={"ksp_type": "cg",
+                       "pc_type": "hypre",
+                       "pc_hypre_type": "boomeramg",
+                       "ksp_rtol": 1e-8},  # {"ksp_type": "preonly", "pc_type": "lu"}
+        petsc_options_prefix="neumann_dirichlet_",
+    )
+
+    uh = problem.solve()
+
+    lu_solver = problem.solver
+    viewer = PETSc.Viewer().createASCII("lu_output.txt")
+    lu_solver.view(viewer)
+    solver_output = open("lu_output.txt", "r")
+    for line in solver_output.readlines():
+        print(line)
+
+    # Error
+    comm = uh.function_space.mesh.comm
+    error = form(ufl.inner(uh - u_ex, uh - u_ex) * ufl.dx)
+    E = np.sqrt(comm.allreduce(assemble_scalar(error), MPI.SUM))
+    if comm.rank == 0:
+        print(f"L2-error: {E:.2e}")
+
+    # save results
+    coords_dof = uh.function_space.tabulate_dof_coordinates()
+    uh_3d = uh.x.array.reshape(coords_dof.shape[0], 3)
+
+    with open("u2dp0dt2.pkl", "wb") as pkf:
+        pickle.dump((coords_dof, uh_3d), pkf, pickle.HIGHEST_PROTOCOL)
+
+    return time, (coords_dof, uh_3d)
+
+def _prepare_ticks(plt: plt, axes: List[plt.Axes], params: Tuple = (7, 5, 7, 5), labelsize=14, inner: bool = False) -> None:
+    if inner:
+        plt.rcParams['xtick.direction'] = 'in'
+        plt.rcParams['ytick.direction'] = 'in'
+        plt.rcParams['axes.axisbelow'] = True
+    for ax in axes:
+        ax.tick_params(axis="x", which="major", length=params[0])
+        ax.tick_params(axis="x", which="minor", length=params[1])
+        ax.tick_params(axis="y", which="major", length=params[2])
+        ax.tick_params(axis="y", which="minor", length=params[3])
+        ax.tick_params(labelsize=labelsize)
+
+def plt_dtdp0():
+    # L2-error: 1.75e+10
+    with open("u2dp0dt0.pkl", "rb") as pkf:
+        coords_dof, uh_3d = pickle.load(pkf)
+    x_fem_ls = []
+    ux_fem_ls = []
+    y_fem_ls = []
+    uy_fem_ls = []
+    z_fem_ls = []
+    uz_fem_ls = []
+
+    for u, xyz in zip(uh_3d.tolist(), coords_dof.tolist()):
+        x_fem_ls.append(xyz[0])
+        ux_fem_ls.append(u[0])
+        y_fem_ls.append(xyz[1])
+        uy_fem_ls.append(u[1])
+        z_fem_ls.append(xyz[2])
+        uz_fem_ls.append(u[2])
+
+    # x
+    fig, axes = plt.subplots(1,2)
+    _prepare_ticks(plt,axes)
+    axes[0].scatter(x_fem_ls, ux_fem_ls, s=10, label="Ux",c="#7f7f7f")
+    x_ls = np.linspace(-0.5*sum(DXYZ[0]), 0.5*sum(DXYZ[0]), 1000)
+    axes[0].plot(x_ls, [x**2 for x in x_ls],c="#7f7f7f")
+    
+    axes[1].scatter(z_fem_ls, uz_fem_ls, s=10, label="Uz",c="#7f7f7f")
+    z_ls = np.linspace(0.0, sum(DXYZ[2]), 1000)
+    axes[1].plot(z_ls, [z**2 for z in z_ls],c="#7f7f7f")
+    fig.legend()
+    plt.subplots_adjust(wspace=0.3)
+    fig.savefig("uxuz.png", dpi=200, bbox_inches="tight")
+    plt.clf()
+    plt.close()
+
+    # y
+    fig, ax = plt.subplots()
+    ax.scatter(y_fem_ls, uy_fem_ls, s=10, label="Uy",c="#7f7f7f")
+    y_ls = np.linspace(-0.5*sum(DXYZ[1]), 0.5*sum(DXYZ[1]), 1000)
+    ax.plot(y_ls, [y**2 for y in y_ls],c="#7f7f7f")
+    fig.legend()
+    fig.savefig("uy.png")
+    plt.clf()
+    plt.close()
+
+    # z
+    fig, ax = plt.subplots()
+    ax.scatter(z_fem_ls, uz_fem_ls, s=10, label="Uz",c="#7f7f7f")
+    z_ls = np.linspace(0.0, sum(DXYZ[2]), 1000)
+    ax.plot(z_ls, [z**2 for z in z_ls],c="#7f7f7f")
+    fig.legend()
+    fig.savefig("uz.png")
+    plt.clf()
+    plt.close()
+    return
+
+def plt_dp2dt0():
+    # L2-error: 1.75e+10
+    with open("u2dp2dt0.pkl", "rb") as pkf:
+        coords_dof, uh_3d = pickle.load(pkf)
+    x_fem_ls = []
+    ux_fem_ls = []
+    y_fem_ls = []
+    uy_fem_ls = []
+    z_fem_ls = []
+    uz_fem_ls = []
+
+    for u, xyz in zip(uh_3d.tolist(), coords_dof.tolist()):
+        x_fem_ls.append(xyz[0])
+        ux_fem_ls.append(u[0])
+        y_fem_ls.append(xyz[1])
+        uy_fem_ls.append(u[1])
+        z_fem_ls.append(xyz[2])
+        uz_fem_ls.append(u[2])
+
+    # x
+    fig, axes = plt.subplots(1,2)
+    _prepare_ticks(plt,axes)
+    axes[0].scatter(x_fem_ls, ux_fem_ls, s=10, label="Ux",c="#7f7f7f")
+    x_ls = np.linspace(-0.5*sum(DXYZ[0]), 0.5*sum(DXYZ[0]), 1000)
+    axes[0].plot(x_ls, [x**2 for x in x_ls],c="#7f7f7f")
+    
+    axes[1].scatter(z_fem_ls, uz_fem_ls, s=10, label="Uz",c="#7f7f7f")
+    z_ls = np.linspace(0.0, sum(DXYZ[2]), 1000)
+    axes[1].plot(z_ls, [z**2 for z in z_ls],c="#7f7f7f")
+    fig.legend()
+    plt.subplots_adjust(wspace=0.3)
+    fig.savefig("uxuzdp2.png", dpi=200, bbox_inches="tight")
+    plt.clf()
+    plt.close()
+
+    # y
+    fig, ax = plt.subplots()
+    ax.scatter(y_fem_ls, uy_fem_ls, s=10, label="Uy",c="#7f7f7f")
+    y_ls = np.linspace(-0.5*sum(DXYZ[1]), 0.5*sum(DXYZ[1]), 1000)
+    ax.plot(y_ls, [y**2 for y in y_ls],c="#7f7f7f")
+    fig.legend()
+    fig.savefig("uydp2.png")
+    plt.clf()
+    plt.close()
+
+    # z
+    fig, ax = plt.subplots()
+    ax.scatter(z_fem_ls, uz_fem_ls, s=10, label="Uz",c="#7f7f7f")
+    z_ls = np.linspace(0.0, sum(DXYZ[2]), 1000)
+    ax.plot(z_ls, [z**2 for z in z_ls],c="#7f7f7f")
+    fig.legend()
+    fig.savefig("uzdp2.png")
+    plt.clf()
+    plt.close()
+    return
+
+def plt_dp0dt2():
+    # L2-error: 1.76e+10
+    with open("u2dp0dt2.pkl", "rb") as pkf:
+        coords_dof, uh_3d = pickle.load(pkf)
+    x_fem_ls = []
+    ux_fem_ls = []
+    y_fem_ls = []
+    uy_fem_ls = []
+    z_fem_ls = []
+    uz_fem_ls = []
+
+    for u, xyz in zip(uh_3d.tolist(), coords_dof.tolist()):
+        x_fem_ls.append(xyz[0])
+        ux_fem_ls.append(u[0])
+        y_fem_ls.append(xyz[1])
+        uy_fem_ls.append(u[1])
+        z_fem_ls.append(xyz[2])
+        uz_fem_ls.append(u[2])
+
+    # x
+    fig, axes = plt.subplots(1,2)
+    _prepare_ticks(plt,axes)
+    axes[0].scatter(x_fem_ls, ux_fem_ls, s=10, label="Ux",c="#7f7f7f")
+    x_ls = np.linspace(-0.5*sum(DXYZ[0]), 0.5*sum(DXYZ[0]), 1000)
+    axes[0].plot(x_ls, [x**2 for x in x_ls],c="#7f7f7f")
+    
+    axes[1].scatter(z_fem_ls, uz_fem_ls, s=10, label="Uz",c="#7f7f7f")
+    z_ls = np.linspace(0.0, sum(DXYZ[2]), 1000)
+    axes[1].plot(z_ls, [z**2 for z in z_ls],c="#7f7f7f")
+    fig.legend()
+    plt.subplots_adjust(wspace=0.3)
+    fig.savefig("uxuzdt2.png", dpi=200, bbox_inches="tight")
+    plt.clf()
+    plt.close()
+
+    # y
+    fig, ax = plt.subplots()
+    ax.scatter(y_fem_ls, uy_fem_ls, s=10, label="Uy",c="#7f7f7f")
+    y_ls = np.linspace(-0.5*sum(DXYZ[1]), 0.5*sum(DXYZ[1]), 1000)
+    ax.plot(y_ls, [y**2 for y in y_ls],c="#7f7f7f")
+    fig.legend()
+    fig.savefig("uydt2.png")
+    plt.clf()
+    plt.close()
+
+    # z
+    fig, ax = plt.subplots()
+    ax.scatter(z_fem_ls, uz_fem_ls, s=10, label="Uz",c="#7f7f7f")
+    z_ls = np.linspace(0.0, sum(DXYZ[2]), 1000)
+    ax.plot(z_ls, [z**2 for z in z_ls],c="#7f7f7f")
+    
+    fig.legend()
+    fig.savefig("uzdt2.png")
+    plt.clf()
+    plt.close()
+    return
+
 if __name__ == "__main__":
+    plt_baseline_compare_graph(["/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
+                                "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
+                                ])
+    # test4()
+    # plt_dp0dt2()
     # start = time()
     # calc_displacement("/mnt/f/tarumai2/900.0_0.1_10000.0_10.0_1.0_v/tmp.0057.SUM",
     #                   "/mnt/f/tarumai2/900.0_0.1_10000.0_10.0_1.0_v/unrest/900.0_0.1_15000.0_10.0_100000.0_v_d/ITER_1/tmp.1096.SUM",
@@ -698,7 +1335,7 @@ if __name__ == "__main__":
         # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_20000.0_10.0_100000.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_25000.0_10.0_100000.0_v_d",         #! これより下向き
         # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_30000.0_10.0_100000.0_v_d",
-        "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
+        # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_100000.0_v/unrest/900.0_0.0_35000.0_10.0_100000.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_15000.0_10.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_20000.0_10.0_v_d",
         # "/mnt/f/tarumai2/900.0_0.0_10000.0_10.0_v/unrest/900.0_0.0_25000.0_10.0_v_d",
@@ -746,14 +1383,13 @@ if __name__ == "__main__":
         # "/mnt/f/tarumai2/900.0_0.1_10000.0_10000.0_v/unrest/900.0_0.1_35000.0_10000.0_v_d",
         # TODO: brit条件
                  ]
-    for dirpth in dirpth_ls:
-        print(dirpth)
+    # for dirpth in dirpth_ls:
+        # print(dirpth)
         # calc_displacement_dir(dirpth)
-        plt_surface_uh_for_dir(dirpth + "/displacement")
+        # plt_surface_uh_for_dir(dirpth + "/displacement")
         # img2mov(dirpth+"/tstep/displacement/X/", ftype="displacement")
         # img2mov(dirpth+"/tstep/displacement/Y/", ftype="displacement")
         # img2mov(dirpth+"/tstep/displacement/Z/", ftype="displacement")
         # plt_baseline_graph(dirpth)
-
     # plt_surface_uh_for_dir("/mnt/f/tarumai2/900.0_0.0_1000.0_10.0_100000.0_v/unrest/900.0_0.0_15000.0_10.0_100000.0_v_d"+"/displacement_lu")
     pass
